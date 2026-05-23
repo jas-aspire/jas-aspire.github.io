@@ -1,1 +1,59 @@
 
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=1280">
+  <title>JasMovies</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════
+     HOME  (navbar lives INSIDE this view so it only
+            appears on the home screen)
+══════════════════════════════════════════════════════ -->
+<div id="view-home" class="view active">
+  <nav id="navbar">
+    <span id="logo">🎬 JasMovies</span>
+    <button id="btn-nav-search" class="nav-btn focusable" tabindex="0">🔍 Search</button>
+  </nav>
+  <div id="home-scroll">
+    <!-- hero + rows injected by JS -->
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════
+     DETAIL
+══════════════════════════════════════════════════════ -->
+<div id="view-detail" class="view">
+  <!-- fully replaced by JS -->
+</div>
+
+<!-- ═══════════════════════════════════════════════════
+     PLAYER
+══════════════════════════════════════════════════════ -->
+<div id="view-player" class="view">
+  <!-- fully replaced by JS -->
+</div>
+
+<!-- ═══════════════════════════════════════════════════
+     SEARCH
+══════════════════════════════════════════════════════ -->
+<div id="view-search" class="view">
+  <div id="search-header">
+    <button id="btn-search-back" class="p-btn focusable" tabindex="0">← Back</button>
+    <input id="search-box" type="text" tabindex="0"
+           placeholder="Search movies &amp; TV shows…"
+           autocomplete="off" spellcheck="false">
+  </div>
+  <div id="search-scroll">
+    <div id="search-results">
+      <p class="placeholder">Type to search movies and TV shows…</p>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
