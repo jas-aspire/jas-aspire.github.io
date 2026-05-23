@@ -1,0 +1,309 @@
+/* ═══════════════════════════════════════════════════════════
+   JasMovies — TV-first stylesheet
+   - No hover states; focus is driven by JS adding .focused
+   - White border = "you are here" for the remote
+   - Designed for 1280×720 / 1920×1080 Firestick output
+═══════════════════════════════════════════════════════════ */
+
+:root {
+  --bg:       #141414;
+  --bg2:      #1c1c1c;
+  --accent:   #e50914;
+  --text:     #ffffff;
+  --muted:    #999999;
+  --radius:   6px;
+  --ease:     0.12s ease;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  width: 100%; height: 100%;
+  margin: 0; padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-size: 18px;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* hide scrollbars but keep scroll functionality */
+::-webkit-scrollbar { display: none; }
+* { scrollbar-width: none; }
+
+/* ── Views ─────────────────────────────────────────────── */
+.view {
+  display: none;
+  position: fixed; inset: 0;
+  overflow: hidden;
+}
+.view.active { display: flex; flex-direction: column; }
+
+/* ── Focus system ──────────────────────────────────────── */
+.focusable {
+  outline: none;
+  cursor: pointer;
+  border: 3px solid transparent;
+  transition: border-color var(--ease), transform var(--ease),
+              background-color var(--ease);
+  user-select: none;
+  -webkit-user-select: none;
+}
+/* White border = the universal "you are here" signal */
+.focusable.focused     { border-color: #fff !important; }
+/* Cards get a scale bump */
+.card.focused          { transform: scale(1.1); z-index: 20; }
+/* Buttons get a small lift */
+.btn-white.focused,
+.btn-ghost.focused,
+.btn-play.focused,
+.btn-resume.focused,
+.btn-back.focused,
+.nav-btn.focused,
+.p-btn.focused,
+.s-btn.focused,
+.ep-btn.focused        { transform: scale(1.04); }
+
+
+/* ═══════════════════════════════════════════════════════════
+   HOME
+═══════════════════════════════════════════════════════════ */
+#view-home { background: var(--bg); }
+
+/* navbar sits at the very top, full width */
+#navbar {
+  position: absolute; top: 0; left: 0; right: 0;
+  height: 64px; z-index: 10;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 52px;
+  background: linear-gradient(to bottom, rgba(20,20,20,.97), transparent);
+  pointer-events: none;           /* let clicks reach the hero behind it */
+}
+#navbar > * { pointer-events: auto; }  /* except the actual buttons */
+
+#logo {
+  color: var(--accent);
+  font-size: 26px; font-weight: 900; letter-spacing: -.5px;
+}
+.nav-btn {
+  background: rgba(255,255,255,.1); color: var(--text);
+  font-size: 15px; font-weight: 700;
+  padding: 8px 20px; border-radius: var(--radius);
+  border: 3px solid transparent;
+}
+.nav-btn.focused { background: rgba(255,255,255,.22); }
+
+/* scrollable home content */
+#home-scroll {
+  flex: 1;
+  overflow-y: scroll;
+  scroll-behavior: smooth;
+}
+
+/* ── Hero ──────────────────────────────────────────────── */
+#hero {
+  position: relative; height: 540px;
+  background: #111; overflow: hidden;
+}
+#hero-bg {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%; object-fit: cover; opacity: .45;
+}
+#hero-grad {
+  position: absolute; inset: 0;
+  background:
+    linear-gradient(to right, rgba(20,20,20,.97) 35%, transparent 72%),
+    linear-gradient(to top,   rgba(20,20,20,1)   0%,  transparent 44%);
+}
+#hero-info {
+  position: absolute; bottom: 64px; left: 52px; max-width: 520px;
+}
+#hero-title    { font-size: 50px; font-weight: 900; line-height: 1.1; margin-bottom: 10px; text-shadow: 1px 2px 8px rgba(0,0,0,.7); }
+#hero-meta     { color: var(--muted); font-size: 15px; margin-bottom: 10px; }
+#hero-desc     { font-size: 15px; color: #ccc; line-height: 1.55; margin-bottom: 22px;
+                 display: -webkit-box; -webkit-line-clamp: 3;
+                 -webkit-box-orient: vertical; overflow: hidden; }
+#hero-btns     { display: flex; gap: 12px; }
+
+.btn-white {
+  background: var(--text); color: #000;
+  padding: 13px 30px; border-radius: var(--radius);
+  font-size: 18px; font-weight: 800;
+  border: 3px solid transparent;
+}
+.btn-white.focused { background: #ddd; border-color: var(--accent); }
+
+.btn-ghost {
+  background: rgba(255,255,255,.14); color: var(--text);
+  padding: 13px 30px; border-radius: var(--radius);
+  font-size: 18px; font-weight: 700;
+  border: 3px solid transparent;
+}
+.btn-ghost.focused { background: rgba(255,255,255,.28); }
+
+/* ── Category rows ─────────────────────────────────────── */
+.cat-row   { margin-bottom: 28px; }
+.cat-title { font-size: 19px; font-weight: 700; padding: 0 52px; margin-bottom: 10px; }
+.row-strip { display: flex; gap: 10px; padding: 6px 52px 12px; overflow-x: scroll; }
+
+/* ── Cards ─────────────────────────────────────────────── */
+.card {
+  flex-shrink: 0;
+  width: 155px; height: 232px;
+  border-radius: var(--radius); background: var(--bg2);
+  overflow: hidden; position: relative;
+  border: 3px solid transparent;
+  transition: border-color var(--ease), transform var(--ease);
+}
+.card img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.card-label {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  background: rgba(0,0,0,.88); padding: 6px 8px;
+  opacity: 0; transition: opacity var(--ease);
+}
+.card.focused .card-label { opacity: 1; }
+.card-name   { font-size: 11px; font-weight: 700; line-height: 1.3; }
+.card-sub    { font-size: 10px; color: #ffd700; margin-top: 2px; }
+
+
+/* ═══════════════════════════════════════════════════════════
+   DETAIL
+═══════════════════════════════════════════════════════════ */
+#view-detail { background: var(--bg); }
+
+/* these IDs are injected by JS; selectors still work */
+#detail-bg {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%; object-fit: cover;
+  opacity: .15; filter: blur(3px); pointer-events: none;
+}
+#detail-grad {
+  position: absolute; inset: 0;
+  background: linear-gradient(to right, rgba(20,20,20,.98) 48%, rgba(20,20,20,.55));
+  pointer-events: none;
+}
+#detail-scroll {
+  position: relative; z-index: 1;
+  flex: 1; overflow-y: scroll;
+  padding: 52px;
+}
+#detail-body    { display: flex; gap: 44px; align-items: flex-start; }
+#detail-poster  { width: 210px; height: 315px; object-fit: cover; border-radius: var(--radius); box-shadow: 0 8px 40px rgba(0,0,0,.9); flex-shrink: 0; }
+#detail-info    { flex: 1; }
+#detail-title   { font-size: 40px; font-weight: 900; margin-bottom: 10px; }
+#detail-meta    { color: var(--muted); font-size: 15px; margin-bottom: 14px; line-height: 1.9; }
+#detail-overview{ font-size: 15px; color: #ccc; line-height: 1.65; margin-bottom: 26px; max-width: 680px; }
+#detail-btns    { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 32px; }
+
+.btn-play   { background: var(--text);         color: #000;        padding: 12px 28px; border-radius: var(--radius); font-size: 17px; font-weight: 800; border: 3px solid transparent; }
+.btn-resume { background: #1a6b3a;             color: var(--text); padding: 12px 28px; border-radius: var(--radius); font-size: 17px; font-weight: 700; border: 3px solid transparent; }
+.btn-back   { background: rgba(255,255,255,.1);color: var(--text); padding: 12px 28px; border-radius: var(--radius); font-size: 17px; font-weight: 700; border: 3px solid transparent; }
+.btn-play.focused   { background: #ddd;                  border-color: var(--accent); }
+.btn-resume.focused { background: #23934f;               }
+.btn-back.focused   { background: rgba(255,255,255,.22); }
+
+/* ── TV episode section ─────────────────────────────────── */
+#ep-section   { margin-top: 4px; }
+.ep-hdr       { font-size: 17px; font-weight: 700; margin-bottom: 10px; }
+#season-row   { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+.s-btn {
+  padding: 7px 18px; border-radius: var(--radius);
+  background: rgba(255,255,255,.1); font-size: 14px; font-weight: 700;
+  border: 3px solid transparent; color: var(--text);
+}
+.s-btn.active  { background: var(--accent); }
+.s-btn.focused { }
+
+#ep-grid  { display: flex; flex-wrap: wrap; gap: 8px; max-height: 210px; overflow-y: scroll; }
+.ep-btn {
+  padding: 7px 14px; border-radius: var(--radius);
+  background: rgba(255,255,255,.08); font-size: 13px;
+  border: 3px solid transparent; color: var(--text); white-space: nowrap;
+}
+.ep-btn.focused { background: rgba(255,255,255,.2); }
+
+
+/* ═══════════════════════════════════════════════════════════
+   PLAYER
+═══════════════════════════════════════════════════════════ */
+#view-player { background: #000; }
+
+#player-bar {
+  flex-shrink: 0;
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 22px;
+  background: rgba(0,0,0,.92);
+}
+.p-btn {
+  background: rgba(255,255,255,.1); color: var(--text);
+  padding: 7px 16px; border-radius: var(--radius);
+  font-size: 14px; font-weight: 700;
+  border: 3px solid transparent; white-space: nowrap;
+}
+.p-btn.focused { background: rgba(255,255,255,.24); }
+
+#player-title   { flex: 1; text-align: center; font-size: 14px; font-weight: 600; color: rgba(255,255,255,.82); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#src-label      { font-size: 12px; font-weight: 700; color: #bbb; min-width: 90px; text-align: center; }
+
+#frame-wrap {
+  flex: 1; position: relative; background: #000;
+  display: flex; flex-direction: column;
+}
+/* Shown after 30s when no stream starts (unreleased/unavailable title) */
+#no-stream-overlay {
+  position: absolute; inset: 0; z-index: 20;
+  display: flex; align-items: center; justify-content: center;
+  flex-direction: column; gap: 10px;
+  background: rgba(10,10,10,.97);
+  color: var(--text); padding: 40px;
+  animation: fadein .4s ease;
+}
+@keyframes fadein { from { opacity: 0 } to { opacity: 1 } }
+
+/* Shown when an iframe-blocking source is selected in a browser */
+#player-overlay {
+  position: absolute; inset: 0; z-index: 5;
+  display: flex; align-items: center; justify-content: center;
+  flex-direction: column; gap: 10px;
+  background: #141414;
+  color: var(--text); text-align: center; padding: 40px;
+}
+#player-frame {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%; border: none;
+  z-index: 1; background: transparent;
+}
+
+
+/* ═══════════════════════════════════════════════════════════
+   SEARCH
+═══════════════════════════════════════════════════════════ */
+#view-search  { background: var(--bg); }
+#search-header{
+  flex-shrink: 0; display: flex; align-items: center; gap: 14px;
+  padding: 20px 52px; background: rgba(20,20,20,.98);
+}
+#search-box {
+  flex: 1;
+  background: rgba(255,255,255,.1);
+  border: 3px solid rgba(255,255,255,.18);
+  border-radius: var(--radius); color: var(--text);
+  padding: 11px 18px; font-size: 18px; outline: none;
+  transition: border-color var(--ease), background var(--ease);
+}
+#search-box:focus, #search-box.focused {
+  border-color: #fff; background: rgba(255,255,255,.15);
+}
+#search-scroll  { flex: 1; overflow-y: scroll; padding: 22px 52px; }
+#search-results { display: flex; flex-wrap: wrap; gap: 14px; }
+.placeholder    { color: var(--muted); font-size: 18px; padding: 60px 0; width: 100%; text-align: center; }
+
+
+/* ═══════════════════════════════════════════════════════════
+   SHARED UTILITIES
+═══════════════════════════════════════════════════════════ */
+.spin-wrap  { flex: 1; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 18px; min-height: 300px; }
+.spinner    { width: 46px; height: 46px; border: 4px solid rgba(255,255,255,.12); border-top-color: var(--accent); border-radius: 50%; animation: spin .75s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.err        { color: #ff6b6b; font-size: 18px; text-align: center; padding: 80px 40px; }
