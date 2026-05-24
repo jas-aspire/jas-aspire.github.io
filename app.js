@@ -604,8 +604,7 @@ function renderPlayer() {
       ${embeddable ? `<iframe id="player-frame"
         src="${url}"
         allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
-        allowfullscreen
-        sandbox="allow-scripts allow-same-origin allow-forms allow-presentation allow-pointer-lock">
+        allowfullscreen>
       </iframe>` : ''}
     </div>`;
 
@@ -749,11 +748,41 @@ function spinner() {
    BOOT
 ═══════════════════════════════════════════════════════════════════ */
 document.addEventListener('DOMContentLoaded', () => {
-  // ── Ad-blocker: re-focus the app window if a popup steals focus while in the player.
-  // The iframe sandbox (no allow-popups) blocks most popups at the browser level, but
-  // this catches any that slip through via other mechanisms (redirects, focus-grabs).
+  // ── Ad-blocker ─────────────────────────────────────────────────────────────────────
+  // We can't inject into cross-origin iframes, so the strategy is:
+  //  1. Detect focus-steal (window blur while in player) → immediately refocus.
+  //  2. Show a brief "Ad blocked" toast so it's obvious what happened.
+  //  3. Override window.open on THIS page so any popup the parent triggers is a no-op.
+  // This covers: popup tabs, focus-steal redirects, and parent-page open() calls.
+  window.open = (() => {
+    const _orig = window.open.bind(window);
+    return function(url, target, features) {
+      // Allow the explicit "Open in tab" button on non-embeddable sources
+      if (document.activeElement?.id === 'btn-open-tab') return _orig(url, target, features);
+      if (active === 'player') { _showAdBlockedToast(); return null; }
+      return _orig(url, target, features);
+    };
+  })();
+
+  let _adToastTimer = null;
+  function _showAdBlockedToast() {
+    clearTimeout(_adToastTimer);
+    let t = document.getElementById('ad-blocked-toast');
+    if (!t) {
+      t = document.createElement('div');
+      t.id = 'ad-blocked-toast';
+      document.body.appendChild(t);
+    }
+    t.textContent = '🛡 Ad blocked';
+    t.classList.add('visible');
+    _adToastTimer = setTimeout(() => t?.classList.remove('visible'), 2200);
+  }
+
   window.addEventListener('blur', () => {
-    if (active === 'player') setTimeout(() => window.focus(), 60);
+    if (active !== 'player') return;
+    // Snap focus back after a tick — prevents the popup from being seen at all
+    setTimeout(() => { try { window.focus(); } catch (_) {} }, 40);
+    _showAdBlockedToast();
   });
 
   // ── Secure-context warning ──────────────────────────────────────────────────
