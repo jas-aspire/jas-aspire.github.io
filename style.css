@@ -301,6 +301,25 @@ html, body {
 
 
 /* ═══════════════════════════════════════════════════════════
+   AD-BLOCKER TOAST
+   Appears briefly in the top-right corner whenever a popup
+   or focus-steal is intercepted during playback.
+═══════════════════════════════════════════════════════════ */
+#ad-blocked-toast {
+  position: fixed; top: 68px; right: 22px; z-index: 9999;
+  background: rgba(14,14,14,.96);
+  border: 2px solid #27ae60;
+  color: #fff; padding: 9px 18px;
+  border-radius: 8px; font-size: 14px; font-weight: 700;
+  pointer-events: none;
+  opacity: 0; transform: translateX(14px);
+  transition: opacity .18s ease, transform .18s ease;
+}
+#ad-blocked-toast.visible {
+  opacity: 1; transform: translateX(0);
+}
+
+/* ═══════════════════════════════════════════════════════════
    SHARED UTILITIES
 ═══════════════════════════════════════════════════════════ */
 .spin-wrap  { flex: 1; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 18px; min-height: 300px; }
