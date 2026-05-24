@@ -534,6 +534,13 @@ function openPlayer(id, mediaType, season, episode, title, posterPath) {
 
   _pl = { id, mediaType, season, episode, title, posterPath: posterPath || null, src: 0, resumeTs };
 
+  // ── FIX: reset _lastSave so the first 10 s of playback are ignored for saving.
+  // Vidking briefly plays from t=0 before seeking to the &progress= position; without
+  // this reset, that early currentTime (e.g. 5–8 s) would overwrite the real saved
+  // position as soon as the player opens (because _lastSave is from the previous session
+  // and `now - _lastSave` is already > 10 000 ms).
+  _lastSave = Date.now();
+
   // Save immediately so the item appears in Continue Watching right away.
   // Preserve the existing watchTimestamp so the resume position is not wiped.
   const _existingProg = getProgress(mediaType, id);
@@ -597,7 +604,8 @@ function renderPlayer() {
       ${embeddable ? `<iframe id="player-frame"
         src="${url}"
         allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
-        allowfullscreen>
+        allowfullscreen
+        sandbox="allow-scripts allow-same-origin allow-forms allow-presentation allow-pointer-lock">
       </iframe>` : ''}
     </div>`;
 
@@ -644,6 +652,9 @@ function onPlayerMsg(e) {
       const now = Date.now();
       if (now - _lastSave > 10_000) {
         _lastSave = now;
+        // ── FIX: keep _pl.resumeTs current so switchSrc() seeks to where we
+        // actually are right now, not to the stale position from session open.
+        _pl.resumeTs = Math.floor(currentTime);
         saveProgress({
           tmdbId: _pl.id, mediaType: _pl.mediaType, title: _pl.title,
           posterPath: _pl.posterPath, backdropPath: null,
@@ -738,6 +749,13 @@ function spinner() {
    BOOT
 ═══════════════════════════════════════════════════════════════════ */
 document.addEventListener('DOMContentLoaded', () => {
+  // ── Ad-blocker: re-focus the app window if a popup steals focus while in the player.
+  // The iframe sandbox (no allow-popups) blocks most popups at the browser level, but
+  // this catches any that slip through via other mechanisms (redirects, focus-grabs).
+  window.addEventListener('blur', () => {
+    if (active === 'player') setTimeout(() => window.focus(), 60);
+  });
+
   // ── Secure-context warning ──────────────────────────────────────────────────
   // crypto.subtle (needed by Vidking) only works in secure contexts.
   // localhost = secure even on HTTP. Any other IP/hostname requires HTTPS.
