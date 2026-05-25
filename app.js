@@ -27,6 +27,7 @@ async function loadConfig() {
     const cfg = await res.json();
     if (!cfg.tmdb_token) throw new Error('tmdb_token missing from config');
     TMDB_TOKEN = cfg.tmdb_token;
+    if (cfg.os_key) OS_KEY = cfg.os_key;   // OpenSubtitles API key (optional)
   } catch (err) {
     console.error('JasMovies: could not load config –', err.message);
     document.body.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;
@@ -252,8 +253,55 @@ function focusFirst(root = document) {
 
 function spatialNav(dir) {
   if (!$f) { focusFirst(); return; }
+
+  // ── Fast-path: TV row navigation on the home screen ─────────────────
+  // The home screen can have 600+ .focusable elements. Calling
+  // getBoundingClientRect() on all of them on every keypress is O(n·reflow)
+  // and completely freezes GeckoView on TV hardware.
+  // Use DOM structure instead: left/right = siblings, up/down = row hops.
+  if (active === 'home') {
+    const strip = $f.closest('.row-strip');
+    if (strip) {
+      if (dir === 'left' || dir === 'right') {
+        const cards = [...strip.querySelectorAll('.focusable')];
+        const idx = cards.indexOf($f);
+        const next = dir === 'right' ? cards[idx + 1] : cards[idx - 1];
+        if (next) { setFocus(next); return; }
+        return; // at strip edge — don't wrap
+      }
+      if (dir === 'up' || dir === 'down') {
+        const currentRow = strip.closest('.cat-row');
+        const homeScroll = document.getElementById('home-scroll');
+        if (homeScroll && currentRow) {
+          const rows = [...homeScroll.querySelectorAll('.cat-row')];
+          const rowIdx = rows.indexOf(currentRow);
+          const delta = dir === 'down' ? 1 : -1;
+          for (let i = rowIdx + delta; i >= 0 && i < rows.length; i += delta) {
+            const f = rows[i].querySelector('.focusable');
+            if (f) { setFocus(f); return; }
+          }
+          if (dir === 'up') {
+            const heroBtn = document.getElementById('btn-hero-play');
+            if (heroBtn) { setFocus(heroBtn); return; }
+          }
+        }
+        return;
+      }
+    }
+    // Focus is on hero/nav buttons — down goes to first row card
+    if (dir === 'down') {
+      const firstCard = document.querySelector('#home-scroll .cat-row .focusable');
+      if (firstCard) { setFocus(firstCard); return; }
+    }
+    if (dir === 'up') return; // already at top
+    // left/right between hero buttons: fall through to generic nav below
+  }
+
+  // ── Generic spatial nav for non-home views ───────────────────────────
+  // Scoped to the active view only (avoids crossing hidden views).
   const W = window.innerWidth, H = window.innerHeight;
-  const all = [...document.querySelectorAll('.focusable')].filter(el => {
+  const scope = document.getElementById('view-' + active) ?? document;
+  const all = [...scope.querySelectorAll('.focusable')].filter(el => {
     const r = el.getBoundingClientRect();
     return r.width > 0 && r.height > 0 &&
            r.top < H + 80 && r.bottom > -80 &&
@@ -282,7 +330,57 @@ function spatialNav(dir) {
   if (best) setFocus(best);
 }
 
+/* ── Player bar auto-hide ────────────────────────────────────────────────
+   The bar fades out 3.5 s after the last keypress during playback.
+   Any keypress (D-pad, Enter, Back) resets the timer and shows the bar.
+   ──────────────────────────────────────────────────────────────────────── */
+let _barHideTimer = null;
+
+function _isFullscreen() {
+  return !!(document.fullscreenElement ||
+            document.webkitFullscreenElement ||
+            document.mozFullScreenElement);
+}
+
+function _showPlayerBar() {
+  const bar = document.getElementById('player-bar');
+  if (!bar) return;
+  bar.classList.remove('bar-hidden');
+  clearTimeout(_barHideTimer);
+  // Only auto-hide when the browser is actually in fullscreen
+  if (_isFullscreen()) {
+    _barHideTimer = setTimeout(() => {
+      const b = document.getElementById('player-bar');
+      if (b && active === 'player' && _isFullscreen()) b.classList.add('bar-hidden');
+    }, 3500);
+  }
+}
+
+function _clearPlayerBar() {
+  clearTimeout(_barHideTimer);
+  _barHideTimer = null;
+  const bar = document.getElementById('player-bar');
+  if (bar) bar.classList.remove('bar-hidden');
+}
+
+// When entering fullscreen: start the hide timer.
+// When exiting fullscreen: cancel timer and permanently show bar.
+['fullscreenchange','webkitfullscreenchange','mozfullscreenchange'].forEach(evt => {
+  document.addEventListener(evt, () => {
+    if (active !== 'player') return;
+    if (_isFullscreen()) {
+      _showPlayerBar(); // starts the hide timer
+    } else {
+      _clearPlayerBar(); // exits fullscreen → bar stays visible always
+    }
+  });
+});
+
 document.addEventListener('keydown', e => {
+  // While in player: show bar on every keypress and reset hide timer.
+  // (Escape/Back falls through to goBack() below as normal.)
+  if (active === 'player') _showPlayerBar();
+
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') {
     if (e.key === 'Escape') { e.preventDefault(); goBack(); }
     return;
@@ -319,8 +417,23 @@ function navigateTo(id, renderFn) {
   requestAnimationFrame(() => focusFirst(document.getElementById('view-' + id)));
 }
 
+/* ── Android GeckoView back-button hook ──────────────────────────────────
+   MainActivity injects a synthetic Escape key when the Fire TV BACK button
+   is pressed.  The keydown handler calls goBack() which either pops the JS
+   navStack (normal navigation) or shows a hint when already at home screen.
+   ──────────────────────────────────────────────────────────────────────── */
+let _backHintShown = false, _backHintTimer = null;
+
 function goBack() {
-  if (!navStack.length) return;
+  if (!navStack.length) {
+    if (!_backHintShown) {
+      _backHintShown = true;
+      showToast('Press ⌂ Home to exit the app', 'neutral');
+      clearTimeout(_backHintTimer);
+      _backHintTimer = setTimeout(() => { _backHintShown = false; }, 3200);
+    }
+    return;
+  }
   const prev = navStack.pop();
   if (active === 'player') killPlayer();
   showView(prev);
@@ -331,11 +444,14 @@ function goBack() {
 
 function killPlayer() {
   clearStreamTimer();
+  _clearPlayerBar();
   window.removeEventListener('message', onPlayerMsg);
   const f = document.getElementById('player-frame');
   if (f) f.src = 'about:blank';
   _justExitedPlayer = true;
   setTimeout(() => { _justExitedPlayer = false; }, 500);
+  // Hide caption overlay (it lives inside frame-wrap which gets destroyed, but be safe)
+  _hideCapLine();
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -894,11 +1010,8 @@ async function initHome() {
   scroll.innerHTML = spinner();
 
   try {
-    const [tr, pop, top, now, ptv, ttv, trtv,
-           act, sci, hor, com, rom, ani, doc, thr, fam,
-           usm, ukm, esm, inm, cnm, jpm, krm, dem, itm,
-           ustv, krtv, jptv, intv] = await Promise.all([
-      // Core
+    // ── Phase 1: 7 core rows — rendered immediately ──────────────────
+    const [tr, pop, top, now, ptv, ttv, trtv] = await Promise.all([
       tmdb('/trending/movie/week'),
       tmdb('/movie/popular'),
       tmdb('/movie/top_rated'),
@@ -906,31 +1019,6 @@ async function initHome() {
       tmdb('/tv/popular'),
       tmdb('/tv/top_rated'),
       tmdb('/trending/tv/week'),
-      // Genres
-      tmdb('/discover/movie', { with_genres: '28',    sort_by: 'popularity.desc', 'vote_count.gte': '200' }),
-      tmdb('/discover/movie', { with_genres: '878',   sort_by: 'popularity.desc', 'vote_count.gte': '200' }),
-      tmdb('/discover/movie', { with_genres: '27',    sort_by: 'popularity.desc', 'vote_count.gte': '200' }),
-      tmdb('/discover/movie', { with_genres: '35',    sort_by: 'popularity.desc', 'vote_count.gte': '200' }),
-      tmdb('/discover/movie', { with_genres: '10749', sort_by: 'popularity.desc', 'vote_count.gte': '200' }),
-      tmdb('/discover/movie', { with_genres: '16',    sort_by: 'popularity.desc', 'vote_count.gte': '200' }),
-      tmdb('/discover/movie', { with_genres: '99',    sort_by: 'popularity.desc', 'vote_count.gte': '100' }),
-      tmdb('/discover/movie', { with_genres: '53',    sort_by: 'popularity.desc', 'vote_count.gte': '200' }),
-      tmdb('/discover/movie', { with_genres: '10751', sort_by: 'popularity.desc', 'vote_count.gte': '200' }),
-      // Country: Movies
-      tmdb('/discover/movie', { with_origin_country: 'US',       sort_by: 'popularity.desc', 'vote_count.gte': '300' }),
-      tmdb('/discover/movie', { with_origin_country: 'GB',       sort_by: 'popularity.desc', 'vote_count.gte': '100' }),
-      tmdb('/discover/movie', { with_original_language: 'es',    sort_by: 'popularity.desc', 'vote_count.gte': '100' }),
-      tmdb('/discover/movie', { with_origin_country: 'IN',       sort_by: 'popularity.desc', 'vote_count.gte': '100' }),
-      tmdb('/discover/movie', { with_origin_country: 'CN|HK|TW', sort_by: 'popularity.desc', 'vote_count.gte': '100' }),
-      tmdb('/discover/movie', { with_origin_country: 'JP',       sort_by: 'popularity.desc', 'vote_count.gte': '100' }),
-      tmdb('/discover/movie', { with_origin_country: 'KR',       sort_by: 'popularity.desc', 'vote_count.gte': '100' }),
-      tmdb('/discover/movie', { with_origin_country: 'DE',       sort_by: 'popularity.desc', 'vote_count.gte': '50'  }),
-      tmdb('/discover/movie', { with_origin_country: 'IT',       sort_by: 'popularity.desc', 'vote_count.gte': '50'  }),
-      // Country: TV
-      tmdb('/discover/tv', { with_origin_country: 'US', sort_by: 'popularity.desc', 'vote_count.gte': '100' }),
-      tmdb('/discover/tv', { with_origin_country: 'KR', sort_by: 'popularity.desc', 'vote_count.gte': '50'  }),
-      tmdb('/discover/tv', { with_origin_country: 'JP', sort_by: 'popularity.desc', 'vote_count.gte': '50'  }),
-      tmdb('/discover/tv', { with_origin_country: 'IN', sort_by: 'popularity.desc', 'vote_count.gte': '50'  }),
     ]);
 
     heroItem = tr.results[0] || pop.results[0];
@@ -948,34 +1036,8 @@ async function initHome() {
       buildRow('📺 Popular TV Shows',   ptv.results,  'tv',    { path: '/tv/popular' }) +
       buildRow('🏆 Top Rated TV',       ttv.results,  'tv',    { path: '/tv/top_rated' }) +
       buildRow('📡 Trending TV',        trtv.results, 'tv',    { path: '/trending/tv/week' }) +
-      buildRow('💥 Action',             act.results,  'movie', { path: '/discover/movie', params: { with_genres: '28',    sort_by: 'popularity.desc', 'vote_count.gte': '200' } }) +
-      buildRow('🚀 Sci-Fi',             sci.results,  'movie', { path: '/discover/movie', params: { with_genres: '878',   sort_by: 'popularity.desc', 'vote_count.gte': '200' } }) +
-      buildRow('👻 Horror',             hor.results,  'movie', { path: '/discover/movie', params: { with_genres: '27',    sort_by: 'popularity.desc', 'vote_count.gte': '200' } }) +
-      buildRow('😂 Comedy',             com.results,  'movie', { path: '/discover/movie', params: { with_genres: '35',    sort_by: 'popularity.desc', 'vote_count.gte': '200' } }) +
-      buildRow('💕 Romance',            rom.results,  'movie', { path: '/discover/movie', params: { with_genres: '10749', sort_by: 'popularity.desc', 'vote_count.gte': '200' } }) +
-      buildRow('🎨 Animation',          ani.results,  'movie', { path: '/discover/movie', params: { with_genres: '16',    sort_by: 'popularity.desc', 'vote_count.gte': '200' } }) +
-      buildRow('🎙 Documentary',        doc.results,  'movie', { path: '/discover/movie', params: { with_genres: '99',    sort_by: 'popularity.desc', 'vote_count.gte': '100' } }) +
-      buildRow('🔪 Thriller',           thr.results,  'movie', { path: '/discover/movie', params: { with_genres: '53',    sort_by: 'popularity.desc', 'vote_count.gte': '200' } }) +
-      buildRow('👨‍👩‍👧 Family',             fam.results,  'movie', { path: '/discover/movie', params: { with_genres: '10751', sort_by: 'popularity.desc', 'vote_count.gte': '200' } }) +
-      buildSectionHeader('🌍 Around the World') +
-      buildRow('🇺🇸 American',           usm.results,  'movie', { path: '/discover/movie', params: { with_origin_country: 'US',       sort_by: 'popularity.desc', 'vote_count.gte': '300' } }) +
-      buildRow('🇬🇧 British',            ukm.results,  'movie', { path: '/discover/movie', params: { with_origin_country: 'GB',       sort_by: 'popularity.desc', 'vote_count.gte': '100' } }) +
-      buildRow('🇪🇸 Latino / Spanish',   esm.results,  'movie', { path: '/discover/movie', params: { with_original_language: 'es',    sort_by: 'popularity.desc', 'vote_count.gte': '100' } }) +
-      buildRow('🇮🇳 Bollywood & Indian', inm.results,  'movie', { path: '/discover/movie', params: { with_origin_country: 'IN',       sort_by: 'popularity.desc', 'vote_count.gte': '100' } }) +
-      buildRow('🇨🇳 Chinese Cinema',     cnm.results,  'movie', { path: '/discover/movie', params: { with_origin_country: 'CN|HK|TW', sort_by: 'popularity.desc', 'vote_count.gte': '100' } }) +
-      buildRow('🇯🇵 Japanese Cinema',    jpm.results,  'movie', { path: '/discover/movie', params: { with_origin_country: 'JP',       sort_by: 'popularity.desc', 'vote_count.gte': '100' } }) +
-      buildRow('🇰🇷 Korean Cinema',      krm.results,  'movie', { path: '/discover/movie', params: { with_origin_country: 'KR',       sort_by: 'popularity.desc', 'vote_count.gte': '100' } }) +
-      buildRow('🇩🇪 German Cinema',      dem.results,  'movie', { path: '/discover/movie', params: { with_origin_country: 'DE',       sort_by: 'popularity.desc', 'vote_count.gte': '50'  } }) +
-      buildRow('🇮🇹 Italian Cinema',     itm.results,  'movie', { path: '/discover/movie', params: { with_origin_country: 'IT',       sort_by: 'popularity.desc', 'vote_count.gte': '50'  } }) +
-      buildSectionHeader('📺 International TV') +
-      buildRow('🇺🇸 American TV',        ustv.results, 'tv',    { path: '/discover/tv', params: { with_origin_country: 'US', sort_by: 'popularity.desc', 'vote_count.gte': '100' } }) +
-      buildRow('🇰🇷 K-Drama',            krtv.results, 'tv',    { path: '/discover/tv', params: { with_origin_country: 'KR', sort_by: 'popularity.desc', 'vote_count.gte': '50'  } }) +
-      buildRow('🇯🇵 Japanese TV',        jptv.results, 'tv',    { path: '/discover/tv', params: { with_origin_country: 'JP', sort_by: 'popularity.desc', 'vote_count.gte': '50'  } }) +
-      buildRow('🇮🇳 Indian TV',          intv.results, 'tv',    { path: '/discover/tv', params: { with_origin_country: 'IN', sort_by: 'popularity.desc', 'vote_count.gte': '50'  } }) +
+      '<div id="home-more-placeholder"></div>' +
       '<div style="height:52px"></div>';
-
-    // ── Infinite scroll: load next TMDB page when sentinel enters view ──
-    initRowInfiniteScroll(scroll);
 
     scroll.addEventListener('click', onHomeClick);
 
@@ -1128,6 +1190,83 @@ async function initHome() {
     document.getElementById('btn-hero-info').onclick =
       () => heroItem && openDetail(heroItem.id, heroType);
     setFocus(document.getElementById('btn-hero-play'), false);
+
+    // ── Phase 2: genres + country rows — deferred so Phase 1 paints first ──
+    // setTimeout(0) yields the main thread; Phase 1 hero + 7 rows render
+    // before any of the 22 additional TMDB network calls start.
+    setTimeout(async () => {
+      try {
+        const [act, sci, hor, com, rom, ani, doc, thr, fam,
+               usm, ukm, esm, inm, cnm, jpm, krm, dem, itm,
+               ustv, krtv, jptv, intv] = await Promise.all([
+          // Genres
+          tmdb('/discover/movie', { with_genres: '28',    sort_by: 'popularity.desc', 'vote_count.gte': '200' }),
+          tmdb('/discover/movie', { with_genres: '878',   sort_by: 'popularity.desc', 'vote_count.gte': '200' }),
+          tmdb('/discover/movie', { with_genres: '27',    sort_by: 'popularity.desc', 'vote_count.gte': '200' }),
+          tmdb('/discover/movie', { with_genres: '35',    sort_by: 'popularity.desc', 'vote_count.gte': '200' }),
+          tmdb('/discover/movie', { with_genres: '10749', sort_by: 'popularity.desc', 'vote_count.gte': '200' }),
+          tmdb('/discover/movie', { with_genres: '16',    sort_by: 'popularity.desc', 'vote_count.gte': '200' }),
+          tmdb('/discover/movie', { with_genres: '99',    sort_by: 'popularity.desc', 'vote_count.gte': '100' }),
+          tmdb('/discover/movie', { with_genres: '53',    sort_by: 'popularity.desc', 'vote_count.gte': '200' }),
+          tmdb('/discover/movie', { with_genres: '10751', sort_by: 'popularity.desc', 'vote_count.gte': '200' }),
+          // Country: Movies
+          tmdb('/discover/movie', { with_origin_country: 'US',       sort_by: 'popularity.desc', 'vote_count.gte': '300' }),
+          tmdb('/discover/movie', { with_origin_country: 'GB',       sort_by: 'popularity.desc', 'vote_count.gte': '100' }),
+          tmdb('/discover/movie', { with_original_language: 'es',    sort_by: 'popularity.desc', 'vote_count.gte': '100' }),
+          tmdb('/discover/movie', { with_origin_country: 'IN',       sort_by: 'popularity.desc', 'vote_count.gte': '100' }),
+          tmdb('/discover/movie', { with_origin_country: 'CN|HK|TW', sort_by: 'popularity.desc', 'vote_count.gte': '100' }),
+          tmdb('/discover/movie', { with_origin_country: 'JP',       sort_by: 'popularity.desc', 'vote_count.gte': '100' }),
+          tmdb('/discover/movie', { with_origin_country: 'KR',       sort_by: 'popularity.desc', 'vote_count.gte': '100' }),
+          tmdb('/discover/movie', { with_origin_country: 'DE',       sort_by: 'popularity.desc', 'vote_count.gte': '50'  }),
+          tmdb('/discover/movie', { with_origin_country: 'IT',       sort_by: 'popularity.desc', 'vote_count.gte': '50'  }),
+          // Country: TV
+          tmdb('/discover/tv', { with_origin_country: 'US', sort_by: 'popularity.desc', 'vote_count.gte': '100' }),
+          tmdb('/discover/tv', { with_origin_country: 'KR', sort_by: 'popularity.desc', 'vote_count.gte': '50'  }),
+          tmdb('/discover/tv', { with_origin_country: 'JP', sort_by: 'popularity.desc', 'vote_count.gte': '50'  }),
+          tmdb('/discover/tv', { with_origin_country: 'IN', sort_by: 'popularity.desc', 'vote_count.gte': '50'  }),
+        ]);
+
+        const moreHtml =
+          buildRow('💥 Action',             act.results,  'movie', { path: '/discover/movie', params: { with_genres: '28',    sort_by: 'popularity.desc', 'vote_count.gte': '200' } }) +
+          buildRow('🚀 Sci-Fi',             sci.results,  'movie', { path: '/discover/movie', params: { with_genres: '878',   sort_by: 'popularity.desc', 'vote_count.gte': '200' } }) +
+          buildRow('👻 Horror',             hor.results,  'movie', { path: '/discover/movie', params: { with_genres: '27',    sort_by: 'popularity.desc', 'vote_count.gte': '200' } }) +
+          buildRow('😂 Comedy',             com.results,  'movie', { path: '/discover/movie', params: { with_genres: '35',    sort_by: 'popularity.desc', 'vote_count.gte': '200' } }) +
+          buildRow('💕 Romance',            rom.results,  'movie', { path: '/discover/movie', params: { with_genres: '10749', sort_by: 'popularity.desc', 'vote_count.gte': '200' } }) +
+          buildRow('🎨 Animation',          ani.results,  'movie', { path: '/discover/movie', params: { with_genres: '16',    sort_by: 'popularity.desc', 'vote_count.gte': '200' } }) +
+          buildRow('🎙 Documentary',        doc.results,  'movie', { path: '/discover/movie', params: { with_genres: '99',    sort_by: 'popularity.desc', 'vote_count.gte': '100' } }) +
+          buildRow('🔪 Thriller',           thr.results,  'movie', { path: '/discover/movie', params: { with_genres: '53',    sort_by: 'popularity.desc', 'vote_count.gte': '200' } }) +
+          buildRow('👨‍👩‍👧 Family',             fam.results,  'movie', { path: '/discover/movie', params: { with_genres: '10751', sort_by: 'popularity.desc', 'vote_count.gte': '200' } }) +
+          buildSectionHeader('🌍 Around the World') +
+          buildRow('🇺🇸 American',           usm.results,  'movie', { path: '/discover/movie', params: { with_origin_country: 'US',       sort_by: 'popularity.desc', 'vote_count.gte': '300' } }) +
+          buildRow('🇬🇧 British',            ukm.results,  'movie', { path: '/discover/movie', params: { with_origin_country: 'GB',       sort_by: 'popularity.desc', 'vote_count.gte': '100' } }) +
+          buildRow('🇪🇸 Latino / Spanish',   esm.results,  'movie', { path: '/discover/movie', params: { with_original_language: 'es',    sort_by: 'popularity.desc', 'vote_count.gte': '100' } }) +
+          buildRow('🇮🇳 Bollywood & Indian', inm.results,  'movie', { path: '/discover/movie', params: { with_origin_country: 'IN',       sort_by: 'popularity.desc', 'vote_count.gte': '100' } }) +
+          buildRow('🇨🇳 Chinese Cinema',     cnm.results,  'movie', { path: '/discover/movie', params: { with_origin_country: 'CN|HK|TW', sort_by: 'popularity.desc', 'vote_count.gte': '100' } }) +
+          buildRow('🇯🇵 Japanese Cinema',    jpm.results,  'movie', { path: '/discover/movie', params: { with_origin_country: 'JP',       sort_by: 'popularity.desc', 'vote_count.gte': '100' } }) +
+          buildRow('🇰🇷 Korean Cinema',      krm.results,  'movie', { path: '/discover/movie', params: { with_origin_country: 'KR',       sort_by: 'popularity.desc', 'vote_count.gte': '100' } }) +
+          buildRow('🇩🇪 German Cinema',      dem.results,  'movie', { path: '/discover/movie', params: { with_origin_country: 'DE',       sort_by: 'popularity.desc', 'vote_count.gte': '50'  } }) +
+          buildRow('🇮🇹 Italian Cinema',     itm.results,  'movie', { path: '/discover/movie', params: { with_origin_country: 'IT',       sort_by: 'popularity.desc', 'vote_count.gte': '50'  } }) +
+          buildSectionHeader('📺 International TV') +
+          buildRow('🇺🇸 American TV',        ustv.results, 'tv',    { path: '/discover/tv', params: { with_origin_country: 'US', sort_by: 'popularity.desc', 'vote_count.gte': '100' } }) +
+          buildRow('🇰🇷 K-Drama',            krtv.results, 'tv',    { path: '/discover/tv', params: { with_origin_country: 'KR', sort_by: 'popularity.desc', 'vote_count.gte': '50'  } }) +
+          buildRow('🇯🇵 Japanese TV',        jptv.results, 'tv',    { path: '/discover/tv', params: { with_origin_country: 'JP', sort_by: 'popularity.desc', 'vote_count.gte': '50'  } }) +
+          buildRow('🇮🇳 Indian TV',          intv.results, 'tv',    { path: '/discover/tv', params: { with_origin_country: 'IN', sort_by: 'popularity.desc', 'vote_count.gte': '50'  } });
+
+        const placeholder = document.getElementById('home-more-placeholder');
+        if (placeholder) {
+          placeholder.insertAdjacentHTML('beforebegin', moreHtml);
+          placeholder.remove();
+        }
+        // All rows (Phase 1 + Phase 2) are now in the DOM — set up infinite scroll once
+        initRowInfiniteScroll(scroll);
+      } catch (_) {
+        // Genre/country rows failed — core 7-row content stays usable
+        const ph = document.getElementById('home-more-placeholder');
+        if (ph) ph.remove();
+        // Still wire up infinite scroll for the Phase 1 rows
+        initRowInfiniteScroll(scroll);
+      }
+    }, 0);
 
   } catch (err) {
     scroll.innerHTML = `<p class="err">⚠ Failed to load: ${h(err.message)}</p>`;
@@ -1486,47 +1625,69 @@ const SRCS = {
   movie: (id, ts) => {
     const t = (ts > 5) ? Math.floor(ts) : 0;
     return [
+      // 0: VidLink (primary)
+      `https://vidlink.pro/movie/${id}?autoplay=true&primaryColor=e50914${t?'&startAt='+t:''}`,
+      // 1: VidKing
       `https://www.vidking.net/embed/movie/${id}?color=e50914&autoPlay=true${t?'&t='+t:''}`,
-      `https://myembed.biz/filme/${id}?autoplay=true${t?'&t='+t:''}`,
-      `https://vidsrc.me/embed/movie?tmdb=${id}&ds_lang=hi&autoplay=true${t?'&t='+t:''}`,
-      `https://multiembed.mov/?video_id=${id}&tmdb=1&lang=fr&autoplay=true${t?'&t='+t:''}`,
-      `https://vidsrc.me/embed/movie?tmdb=${id}&ds_lang=ja&autoplay=true${t?'&t='+t:''}`,
-      `https://vidsrc.me/embed/movie?tmdb=${id}&ds_lang=zh&autoplay=true${t?'&t='+t:''}`,
-      `https://vidlink.pro/movie/${id}?autoplay=true${t?'&t='+t:''}`,
-      `https://player.videasy.net/movie/${id}?autoplay=true${t?'&t='+t:''}`,
-      `https://vidsrc.me/embed/movie?tmdb=${id}&autoplay=true${t?'&t='+t:''}`,
-      `https://www.2embed.stream/embed/movie/${id}?autoplay=true${t?'&t='+t:''}`,
-      `https://vidfast.pro/movie/${id}?autoPlay=true${t?'&t='+t:''}`,
-      `https://multiembed.mov/?video_id=${id}&tmdb=1&autoplay=true${t?'&t='+t:''}`,
-      `https://vidora.su/embed/movie/${id}?autoplay=true${t?'&t='+t:''}`,
-      `https://player.mappletv.uk/watch/movie/${id}?autoplay=true${t?'&t='+t:''}`,
+      // 2: VidEasy
+      `https://player.videasy.net/movie/${id}?autoplay=true&color=e50914${t?'&episode='+t:''}`,
+      // 3: VidSrc (English)
+      `https://vidsrc.me/embed/movie?tmdb=${id}&autoplay=1${t?'&t='+t:''}`,
+      // 4: Vidfast
+      `https://vidfast.pro/movie/${id}?autoPlay=true${t?'&startAt='+t:''}`,
+      // 5: 2Embed
+      `https://www.2embed.stream/embed/movie/${id}`,
+      // 6: SuperEmbed
+      `https://multiembed.mov/?video_id=${id}&tmdb=1&autoplay=true`,
+      // 7: Vidora
+      `https://vidora.su/embed/movie/${id}?autoplay=true`,
+      // 8: Mapple
+      `https://mapple.tv/embed/movie/${id}?autoplay=true`,
+      // Country servers (kept for regional content)
+      `https://vidsrc.me/embed/movie?tmdb=${id}&ds_lang=hi&autoplay=1`,
+      `https://multiembed.mov/?video_id=${id}&tmdb=1&lang=fr&autoplay=true`,
+      `https://vidsrc.me/embed/movie?tmdb=${id}&ds_lang=ja&autoplay=1`,
+      `https://vidsrc.me/embed/movie?tmdb=${id}&ds_lang=zh&autoplay=1`,
     ];
   },
   tv: (id, s, e, ts) => {
     const t = (ts > 5) ? Math.floor(ts) : 0;
     return [
+      // 0: VidLink (primary)
+      `https://vidlink.pro/tv/${id}/${s}/${e}?autoplay=true&primaryColor=e50914${t?'&startAt='+t:''}`,
+      // 1: VidKing
       `https://www.vidking.net/embed/tv/${id}/${s}/${e}?color=e50914&autoPlay=true&nextEpisode=true&episodeSelector=true${t?'&t='+t:''}`,
-      `https://myembed.biz/serie/${id}/${s}/${e}?autoplay=true${t?'&t='+t:''}`,
-      `https://vidsrc.me/embed/tv?tmdb=${id}&season=${s}&episode=${e}&ds_lang=hi&autoplay=true${t?'&t='+t:''}`,
-      `https://multiembed.mov/?video_id=${id}&tmdb=1&s=${s}&e=${e}&lang=fr&autoplay=true${t?'&t='+t:''}`,
-      `https://vidsrc.me/embed/tv?tmdb=${id}&season=${s}&episode=${e}&ds_lang=ja&autoplay=true${t?'&t='+t:''}`,
-      `https://vidsrc.me/embed/tv?tmdb=${id}&season=${s}&episode=${e}&ds_lang=zh&autoplay=true${t?'&t='+t:''}`,
-      `https://vidlink.pro/tv/${id}/${s}/${e}?autoplay=true${t?'&t='+t:''}`,
-      `https://player.videasy.net/tv/${id}/${s}/${e}?autoplay=true${t?'&t='+t:''}`,
-      `https://vidsrc.me/embed/tv?tmdb=${id}&season=${s}&episode=${e}&autoplay=true${t?'&t='+t:''}`,
-      `https://www.2embed.stream/embed/tv/${id}/${s}/${e}?autoplay=true${t?'&t='+t:''}`,
-      `https://vidfast.pro/tv/${id}/${s}/${e}?autoPlay=true${t?'&t='+t:''}`,
-      `https://multiembed.mov/?video_id=${id}&tmdb=1&s=${s}&e=${e}&autoplay=true${t?'&t='+t:''}`,
-      `https://vidora.su/embed/tv/${id}/${s}/${e}?autoplay=true${t?'&t='+t:''}`,
-      `https://player.mappletv.uk/watch/tv/${id}-${s}-${e}?autoplay=true${t?'&t='+t:''}`,
+      // 2: VidEasy
+      `https://player.videasy.net/tv/${id}/${s}/${e}?autoplay=true&color=e50914&nextEpisode=true`,
+      // 3: VidSrc (English)
+      `https://vidsrc.me/embed/tv?tmdb=${id}&season=${s}&episode=${e}&autoplay=1${t?'&t='+t:''}`,
+      // 4: Vidfast
+      `https://vidfast.pro/tv/${id}/${s}/${e}?autoPlay=true`,
+      // 5: 2Embed
+      `https://www.2embed.stream/embed/tv/${id}/${s}/${e}`,
+      // 6: SuperEmbed
+      `https://multiembed.mov/?video_id=${id}&tmdb=1&s=${s}&e=${e}&autoplay=true`,
+      // 7: Vidora
+      `https://vidora.su/embed/tv/${id}/${s}/${e}?autoplay=true`,
+      // 8: Mapple
+      `https://mapple.tv/embed/tv/${id}/${s}/${e}?autoplay=true`,
+      // Country servers (kept for regional content)
+      `https://vidsrc.me/embed/tv?tmdb=${id}&season=${s}&episode=${e}&ds_lang=hi&autoplay=1`,
+      `https://multiembed.mov/?video_id=${id}&tmdb=1&s=${s}&e=${e}&lang=fr&autoplay=true`,
+      `https://vidsrc.me/embed/tv?tmdb=${id}&season=${s}&episode=${e}&ds_lang=ja&autoplay=1`,
+      `https://vidsrc.me/embed/tv?tmdb=${id}&season=${s}&episode=${e}&ds_lang=zh&autoplay=1`,
     ];
   },
 };
 const SRC_NAMES = [
-  'Vidking', 'French',
-  '🇮🇳 Indian', '🇫🇷 French(2)', '🇯🇵 Japanese', '🇨🇳 Chinese',
-  'VidLink', 'VidEasy', 'Vidsrc', '2Embed', 'Vidfast', 'SuperEmbed', 'Vidora', 'Mapple',
+  'VidLink', 'VidKing', 'VidEasy', 'VidSrc',
+  'Vidfast', '2Embed', 'SuperEmbed', 'Vidora', 'Mapple',
+  '🇮🇳 Indian', '🇫🇷 French', '🇯🇵 Japanese', '🇨🇳 Chinese',
 ];
+
+/* ═══════════════════════════════════════════════════════════════════
+   PLAYER SCREEN
+═══════════════════════════════════════════════════════════════════ */
 
 async function openPlayer(id, mediaType, season, episode, title, posterPath, forceTs) {
   season  = season  || 1;
@@ -1596,6 +1757,8 @@ function renderPlayer() {
       <iframe id="player-frame"
         src="${url}"
         allowfullscreen
+        allow="autoplay; fullscreen; encrypted-media; picture-in-picture; gyroscope; accelerometer"
+        referrerpolicy="no-referrer"
       ></iframe>
     </div>`;
 
@@ -1615,6 +1778,9 @@ function renderPlayer() {
 
   startStreamTimer();
   setFocus(document.getElementById('btn-p-exit'), false);
+
+  // Start the bar auto-hide: bar fades out after 3.5 s, returns on any key.
+  _showPlayerBar();
 }
 
 function switchSrc(delta) {
@@ -1818,106 +1984,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       await doDeleteAccount();
     }
   };
-
-  /* ── Ad / Popup Blocker ── */
-  let _adToastTimer = null;
-  function _showAdBlockedToast() {
-    clearTimeout(_adToastTimer);
-    let t = document.getElementById('ad-blocked-toast');
-    if (!t) {
-      t = document.createElement('div');
-      t.id = 'ad-blocked-toast';
-      document.body.appendChild(t);
-    }
-    t.textContent = '🛡 Ad blocked';
-    t.classList.add('visible');
-    _adToastTimer = setTimeout(() => t?.classList.remove('visible'), 2200);
-  }
-
-  window.open = (() => {
-    const _orig = window.open.bind(window);
-    return function(url, target, features) {
-      if (active === 'player') { _showAdBlockedToast(); return null; }
-      return _orig(url, target, features);
-    };
-  })();
-
-  try {
-    const _locProto = Object.getPrototypeOf(window.location);
-    ['href', 'assign', 'replace'].forEach(prop => {
-      const _orig = Object.getOwnPropertyDescriptor(_locProto, prop)
-                 || Object.getOwnPropertyDescriptor(Location.prototype, prop);
-      if (!_orig) return;
-      const isFunc = typeof _orig.value === 'function';
-      Object.defineProperty(_locProto, prop, {
-        ...(isFunc
-          ? { value: function(...args) {
-                if (active === 'player') { _showAdBlockedToast(); return; }
-                return _orig.value.apply(this, args);
-              }
-            }
-          : { set(v) {
-                if (active === 'player') { _showAdBlockedToast(); return; }
-                _orig.set.call(this, v);
-              },
-              get() { return _orig.get ? _orig.get.call(this) : _orig.value; }
-            }
-        ),
-        configurable: true,
-      });
-    });
-  } catch (_) {}
-
-  document.addEventListener('click', e => {
-    const anchor = e.target.closest('a[target="_blank"], a[target="_new"], a[target="_top"]');
-    if (anchor && active === 'player') {
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      _showAdBlockedToast();
-    }
-  }, true);
-
-  const _mo = new MutationObserver(mutations => {
-    if (active !== 'player') return;
-    for (const m of mutations) {
-      for (const node of m.addedNodes) {
-        if (node.nodeType !== 1) continue;
-        const anchors = node.tagName === 'A' ? [node] : [...node.querySelectorAll('a')];
-        for (const anc of anchors) {
-          const t = (anc.target || '').toLowerCase();
-          if (t === '_blank' || t === '_new' || t === '_top') {
-            anc.target = '_self';
-            anc.rel    = 'noopener noreferrer';
-            const href = anc.href || '';
-            if (href && !href.startsWith(window.location.origin)) {
-              anc.removeAttribute('href');
-              anc.style.pointerEvents = 'none';
-            }
-          }
-        }
-      }
-    }
-  });
-  _mo.observe(document.body, { childList: true, subtree: true });
-
-  window.addEventListener('beforeunload', e => {
-    if (active === 'player') { e.preventDefault(); e.returnValue = ''; }
-  });
-
-  history.pushState({ jm: true }, '');
-  window.addEventListener('popstate', () => {
-    if (active === 'player') {
-      history.pushState({ jm: true }, '');
-      _showAdBlockedToast();
-    }
-  });
-
-  window.addEventListener('blur', () => {
-    if (active !== 'player') return;
-    if (_justExitedPlayer) return;
-    setTimeout(() => { try { window.focus(); } catch (_) {} }, 40);
-    _showAdBlockedToast();
-  });
 
   if (!window.isSecureContext) {
     const bar = document.createElement('div');
