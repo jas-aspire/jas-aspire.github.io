@@ -2440,4 +2440,4 @@ document.addEventListener('DOMContentLoaded', async () => {
   showView('home');
   bindSearch();
   initHome();
-});
+}); // JAS
