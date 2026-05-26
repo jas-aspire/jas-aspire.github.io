@@ -424,7 +424,14 @@ function navigateTo(id, renderFn) {
    ──────────────────────────────────────────────────────────────────────── */
 let _backHintShown = false, _backHintTimer = null;
 
+let _goBackBusy = false;
 function goBack() {
+  // Debounce: ignore rapid re-entry within 400ms (prevents double-pop from
+  // duplicate keyboard events or click + keydown firing simultaneously).
+  if (_goBackBusy) return;
+  _goBackBusy = true;
+  setTimeout(() => { _goBackBusy = false; }, 400);
+
   if (!navStack.length) {
     if (!_backHintShown) {
       _backHintShown = true;
@@ -1776,6 +1783,10 @@ async function renderDetail(newSeason) {
         ${collectionHtml}
         ${reviewsHtml}
         ${moreLikeHtml}
+        <div class="detail-section" id="comments-section">
+          <div class="detail-section-title">Comments</div>
+          <div id="comments-body"></div>
+        </div>
         <div style="height:60px"></div>
       </div>
     </div>`;
@@ -1840,6 +1851,158 @@ async function renderDetail(newSeason) {
   );
 
   setFocus(view.querySelector('#btn-play'), false);
+
+  // ── Bootstrap the comments section ─────────────────────
+  initComments(id, mediaType);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   COMMENTS
+   - initComments() renders instantly with no network call
+   - "Load Comments" button fetches on demand
+   - Logged-in: compose box + load button
+   - Logged-out: sign-in wall + load button (can still read)
+═══════════════════════════════════════════════════════════════════ */
+const CMTS_PER_PAGE = 10;
+
+function initComments(tmdbId, mediaType) {
+  const body = document.getElementById('comments-body');
+  if (!body) return;
+
+  if (_session) {
+    const email = _session.user.email || '';
+    body.innerHTML = `
+      <div id="cmt-compose">
+        <div class="cmt-compose-label">Commenting as <span class="cmt-who">${h(email)}</span></div>
+        <textarea id="cmt-textarea" class="cmt-textarea focusable" tabindex="0"
+          placeholder="Share your thoughts…" maxlength="1000" rows="3"></textarea>
+        <div class="cmt-compose-footer">
+          <span id="cmt-charcount" class="cmt-charcount">0 / 1000</span>
+          <button id="btn-cmt-post" class="cmt-post-btn focusable" tabindex="0">Post</button>
+        </div>
+        <p id="cmt-error" class="cmt-error hidden"></p>
+      </div>
+      <button id="btn-load-comments" class="cmt-load-btn focusable" tabindex="0"
+        data-tmdb="${tmdbId}" data-mt="${mediaType}" data-offset="0">
+        💬 Load Comments
+      </button>
+      <div id="cmt-list"></div>`;
+
+    document.getElementById('cmt-textarea').addEventListener('input', e => {
+      document.getElementById('cmt-charcount').textContent = `${e.target.value.length} / 1000`;
+    });
+
+    document.getElementById('btn-cmt-post').addEventListener('click', async () => {
+      const ta   = document.getElementById('cmt-textarea');
+      const err  = document.getElementById('cmt-error');
+      const pbtn = document.getElementById('btn-cmt-post');
+      const txt  = ta.value.trim();
+      err.classList.add('hidden');
+      if (!txt) { err.textContent = 'Comment cannot be empty.'; err.classList.remove('hidden'); return; }
+      pbtn.disabled = true; pbtn.textContent = 'Posting…';
+      const { error } = await supa.from('comments').insert({
+        user_id: _session.user.id, tmdb_id: tmdbId, media_type: mediaType, body: txt,
+      });
+      pbtn.disabled = false; pbtn.textContent = 'Post';
+      if (error) { err.textContent = error.message; err.classList.remove('hidden'); return; }
+      ta.value = ''; document.getElementById('cmt-charcount').textContent = '0 / 1000';
+      showToast('✅ Comment posted!');
+      await _loadComments(tmdbId, mediaType, 0, true);
+    });
+
+  } else {
+    body.innerHTML = `
+      <div id="cmt-guestwall">
+        <span class="cmt-gw-icon">💬</span>
+        <span class="cmt-gw-text">Sign in to post comments</span>
+        <button class="cmt-gw-btn focusable" tabindex="0" id="btn-cmt-signin">Sign In</button>
+      </div>
+      <button id="btn-load-comments" class="cmt-load-btn focusable" tabindex="0"
+        data-tmdb="${tmdbId}" data-mt="${mediaType}" data-offset="0">
+        💬 Load Comments
+      </button>
+      <div id="cmt-list"></div>`;
+    document.getElementById('btn-cmt-signin').addEventListener('click', openAuth);
+  }
+
+  body.addEventListener('click', async e => {
+    const btn = e.target.closest('#btn-load-comments');
+    if (!btn) return;
+    await _loadComments(+btn.dataset.tmdb, btn.dataset.mt, +btn.dataset.offset, +btn.dataset.offset === 0);
+  });
+}
+
+async function _loadComments(tmdbId, mediaType, offset, replace) {
+  const btn  = document.getElementById('btn-load-comments');
+  const list = document.getElementById('cmt-list');
+  if (!btn || !list) return;
+
+  btn.disabled = true;
+  btn.textContent = 'Loading…';
+
+  try {
+    const { data, count, error } = await supa
+      .from('comments')
+      .select('id, body, created_at, user_id, profiles(email)', { count: 'exact' })
+      .eq('tmdb_id', tmdbId)
+      .eq('media_type', mediaType)
+      .order('created_at', { ascending: false })
+      .range(offset, offset + CMTS_PER_PAGE - 1);
+
+    if (error) throw error;
+
+    const comments   = data || [];
+    const total      = count || 0;
+    const nextOffset = offset + comments.length;
+    const remaining  = total - nextOffset;
+
+    if (replace) list.innerHTML = '';
+
+    if (comments.length === 0 && offset === 0) {
+      list.innerHTML = '<p class="cmt-empty">No comments yet. Be the first!</p>';
+    } else {
+      comments.forEach(c => {
+        const email   = c.profiles?.email || '';
+        const name    = email ? email.split('@')[0] : 'user';
+        const initial = name[0].toUpperCase();
+        const date    = new Date(c.created_at).toLocaleDateString('en-US',
+          { year: 'numeric', month: 'short', day: 'numeric' });
+        const isOwn   = _session && c.user_id === _session.user.id;
+        const el      = document.createElement('div');
+        el.className  = 'cmt-item';
+        el.innerHTML  = `
+          <div class="cmt-avatar">${h(initial)}</div>
+          <div class="cmt-content">
+            <div class="cmt-meta">
+              <span class="cmt-name">${h(name)}</span>
+              <span class="cmt-date">${date}</span>
+              ${isOwn ? `<button class="cmt-del focusable" tabindex="0" data-cid="${h(c.id)}">🗑</button>` : ''}
+            </div>
+            <div class="cmt-body">${h(c.body)}</div>
+          </div>`;
+        el.querySelector('.cmt-del')?.addEventListener('click', async () => {
+          if (!await showConfirm('Delete your comment?')) return;
+          await supa.from('comments').delete().eq('id', c.id).eq('user_id', _session.user.id);
+          el.remove();
+          showToast('🗑 Deleted.', 'neutral');
+        });
+        list.appendChild(el);
+      });
+    }
+
+    if (remaining > 0) {
+      btn.disabled = false;
+      btn.dataset.offset = nextOffset;
+      btn.textContent = `Load More (${remaining} more)`;
+    } else {
+      btn.remove();
+    }
+
+  } catch (_err) {
+    btn.disabled = false;
+    btn.textContent = '💬 Load Comments';
+    showToast('⚠ Could not load comments.', 'err');
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -1900,12 +2063,12 @@ const SRCS = {
     const t = (ts > 5) ? Math.floor(ts) : 0;
     return [
       // 0: VidLink (primary)
-      `https://vidlink.pro/movie/${id}?autoplay=true&primaryColor=e50914${t?'&startAt='+t:''}`,
+      `https://vidlink.pro/movie/${id}?primaryColor=e50914&secondaryColor=e50914&autoplay=true${t?'&startAt='+t:''}`,
       // 1: VidKing
       `https://www.vidking.net/embed/movie/${id}?color=e50914&autoPlay=true${t?'&t='+t:''}`,
       // 2: VidEasy
-      `https://player.videasy.net/movie/${id}?autoplay=true&color=e50914${t?'&episode='+t:''}`,
-      // 3: VidSrc (English)
+      `https://player.videasy.net/movie/${id}?autoplay=true&color=e50914${t?'&startAt='+t:''}`,
+      // 3: VidSrc.me
       `https://vidsrc.me/embed/movie?tmdb=${id}&autoplay=1${t?'&t='+t:''}`,
       // 4: Vidfast
       `https://vidfast.pro/movie/${id}?autoPlay=true${t?'&startAt='+t:''}`,
@@ -1913,11 +2076,11 @@ const SRCS = {
       `https://www.2embed.stream/embed/movie/${id}`,
       // 6: SuperEmbed
       `https://multiembed.mov/?video_id=${id}&tmdb=1&autoplay=true`,
-      // 7: Vidora
+      // 7: Embed.su
+      `https://embed.su/embed/movie/${id}`,
+      // 8: Vidora
       `https://vidora.su/embed/movie/${id}?autoplay=true`,
-      // 8: Mapple
-      `https://mapple.tv/embed/movie/${id}?autoplay=true`,
-      // Country servers (kept for regional content)
+      // Country servers
       `https://vidsrc.me/embed/movie?tmdb=${id}&ds_lang=hi&autoplay=1`,
       `https://multiembed.mov/?video_id=${id}&tmdb=1&lang=fr&autoplay=true`,
       `https://vidsrc.me/embed/movie?tmdb=${id}&ds_lang=ja&autoplay=1`,
@@ -1928,12 +2091,12 @@ const SRCS = {
     const t = (ts > 5) ? Math.floor(ts) : 0;
     return [
       // 0: VidLink (primary)
-      `https://vidlink.pro/tv/${id}/${s}/${e}?autoplay=true&primaryColor=e50914${t?'&startAt='+t:''}`,
+      `https://vidlink.pro/tv/${id}/${s}/${e}?primaryColor=e50914&secondaryColor=e50914&autoplay=true`,
       // 1: VidKing
-      `https://www.vidking.net/embed/tv/${id}/${s}/${e}?color=e50914&autoPlay=true&nextEpisode=true&episodeSelector=true${t?'&t='+t:''}`,
+      `https://www.vidking.net/embed/tv/${id}/${s}/${e}?color=e50914&autoPlay=true&nextEpisode=true${t?'&t='+t:''}`,
       // 2: VidEasy
       `https://player.videasy.net/tv/${id}/${s}/${e}?autoplay=true&color=e50914&nextEpisode=true`,
-      // 3: VidSrc (English)
+      // 3: VidSrc.me
       `https://vidsrc.me/embed/tv?tmdb=${id}&season=${s}&episode=${e}&autoplay=1${t?'&t='+t:''}`,
       // 4: Vidfast
       `https://vidfast.pro/tv/${id}/${s}/${e}?autoPlay=true`,
@@ -1941,11 +2104,11 @@ const SRCS = {
       `https://www.2embed.stream/embed/tv/${id}/${s}/${e}`,
       // 6: SuperEmbed
       `https://multiembed.mov/?video_id=${id}&tmdb=1&s=${s}&e=${e}&autoplay=true`,
-      // 7: Vidora
+      // 7: Embed.su
+      `https://embed.su/embed/tv/${id}/${s}/${e}`,
+      // 8: Vidora
       `https://vidora.su/embed/tv/${id}/${s}/${e}?autoplay=true`,
-      // 8: Mapple
-      `https://mapple.tv/embed/tv/${id}/${s}/${e}?autoplay=true`,
-      // Country servers (kept for regional content)
+      // Country servers
       `https://vidsrc.me/embed/tv?tmdb=${id}&season=${s}&episode=${e}&ds_lang=hi&autoplay=1`,
       `https://multiembed.mov/?video_id=${id}&tmdb=1&s=${s}&e=${e}&lang=fr&autoplay=true`,
       `https://vidsrc.me/embed/tv?tmdb=${id}&season=${s}&episode=${e}&ds_lang=ja&autoplay=1`,
@@ -1954,8 +2117,8 @@ const SRCS = {
   },
 };
 const SRC_NAMES = [
-  'VidLink', 'VidKing', 'VidEasy', 'VidSrc',
-  'Vidfast', '2Embed', 'SuperEmbed', 'Vidora', 'Mapple',
+  'VidLink', 'VidKing', 'VidEasy', 'VidSrc.me', 'Vidfast',
+  '2Embed', 'SuperEmbed', 'Embed.su', 'Vidora',
   '🇮🇳 Indian', '🇫🇷 French', '🇯🇵 Japanese', '🇨🇳 Chinese',
 ];
 
@@ -2031,6 +2194,7 @@ function renderPlayer() {
       <iframe id="player-frame"
         src="${url}"
         allowfullscreen
+        tabindex="-1"
         allow="autoplay; fullscreen; encrypted-media; picture-in-picture; gyroscope; accelerometer"
         referrerpolicy="no-referrer"
       ></iframe>
