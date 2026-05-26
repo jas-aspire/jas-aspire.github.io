@@ -2126,7 +2126,7 @@ const SRC_NAMES = [
    PLAYER SCREEN
 ═══════════════════════════════════════════════════════════════════ */
 
-async function openPlayer(id, mediaType, season, episode, title, posterPath, forceTs) {
+async function openPlayer(id, mediaType, season, episode, title, posterPath, forceTs, srcOverride) {
   season  = season  || 1;
   episode = episode || 1;
   title   = title   || '';
@@ -2158,8 +2158,30 @@ async function openPlayer(id, mediaType, season, episode, title, posterPath, for
       ? (local.watchTimestamp || 0) : 0;
   }
 
-  const defaultSrc = _profile?.preferred_source ?? 0;
-  _pl = { id, mediaType, season, episode, title, posterPath: posterPath || null, src: defaultSrc, resumeTs };
+  // ── TV: fetch season/series info needed for Next Episode button ──
+  let tvTotalSeasons = 0, tvEpisodesInSeason = 0;
+  if (mediaType === 'tv') {
+    try {
+      // Reuse series data already in memory if we came from the detail screen
+      const seriesP = (_det?.id === id && _det?.data?.number_of_seasons != null)
+        ? Promise.resolve(_det.data)
+        : tmdb(`/tv/${id}`);
+      const [seriesData, seasonData] = await Promise.all([
+        seriesP,
+        tmdb(`/tv/${id}/season/${season}`),
+      ]);
+      tvTotalSeasons     = seriesData.number_of_seasons || 1;
+      tvEpisodesInSeason = (seasonData.episodes || []).length || episode;
+    } catch (_) {
+      // Fallback: assume we're in a single-season show at the current episode
+      tvTotalSeasons     = season;
+      tvEpisodesInSeason = episode;
+    }
+  }
+
+  const defaultSrc = srcOverride != null ? srcOverride : (_profile?.preferred_source ?? 0);
+  _pl = { id, mediaType, season, episode, title, posterPath: posterPath || null, src: defaultSrc, resumeTs,
+    totalSeasons: tvTotalSeasons, episodesInSeason: tvEpisodesInSeason };
   _lastSave = Date.now();
 
   await saveProgress({
@@ -2174,16 +2196,33 @@ async function openPlayer(id, mediaType, season, episode, title, posterPath, for
 }
 
 function renderPlayer() {
-  const { id, mediaType, season, episode, title, src, resumeTs } = _pl;
+  const { id, mediaType, season, episode, title, src, resumeTs,
+          totalSeasons, episodesInSeason } = _pl;
   const srcs    = mediaType === 'movie' ? SRCS.movie(id, resumeTs) : SRCS.tv(id, season, episode, resumeTs);
   const url     = srcs[src];
   const srcName = SRC_NAMES[src] || `Source ${src + 1}`;
   const display = mediaType === 'tv' ? `${title}  ·  S${season} E${episode}` : title;
 
+  // ── Next Episode button (TV only) ───────────────────────────────────
+  // Show within-season arrow  →  E{n+1}
+  // Show cross-season arrow   →  S{n+1} E1
+  // Hide at end of final season
+  const hasNextEp = mediaType === 'tv' &&
+    (episode < episodesInSeason || season < totalSeasons);
+  const nextEpLabel = mediaType === 'tv'
+    ? (episode < episodesInSeason
+        ? `⏭ E${episode + 1}`
+        : `⏭ S${season + 1} E1`)
+    : '';
+  const nextEpBtn = hasNextEp
+    ? `<button id="btn-next-ep" class="p-btn p-btn-next focusable" tabindex="0">${nextEpLabel}</button>`
+    : '';
+
   document.getElementById('view-player').innerHTML = `
     <div id="player-bar">
       <button id="btn-p-exit" class="p-btn focusable" tabindex="0">← Exit</button>
       <span id="player-title">${h(display)}</span>
+      ${nextEpBtn}
       <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
         <button id="btn-src-prev" class="p-btn focusable" tabindex="0">◀</button>
         <span id="src-label">${h(srcName)} ${src + 1}/${srcs.length}</span>
@@ -2203,6 +2242,7 @@ function renderPlayer() {
   document.getElementById('btn-p-exit').onclick   = goBack;
   document.getElementById('btn-src-prev').onclick = () => switchSrc(-1);
   document.getElementById('btn-src-next').onclick = () => switchSrc(+1);
+  document.getElementById('btn-next-ep')?.addEventListener('click', nextEpisode);
 
   if (_pl.resumeTs > 5) {
     const rt = document.createElement('div');
@@ -2227,6 +2267,29 @@ function switchSrc(delta) {
     : SRCS.tv(_pl.id, _pl.season, _pl.episode, _pl.resumeTs);
   _pl.src = (_pl.src + delta + srcs.length) % srcs.length;
   renderPlayer();
+}
+
+/* ── Next Episode ─────────────────────────────────────────────────────
+   Advances to the next episode within the same season, or to episode 1
+   of the next season when at the season finale. Does nothing (shows a
+   toast) when already at the last episode of the final season.
+   ──────────────────────────────────────────────────────────────────── */
+async function nextEpisode() {
+  const { id, mediaType, season, episode, title, posterPath,
+          totalSeasons, episodesInSeason, src } = _pl;
+  if (mediaType !== 'tv') return;
+
+  if (episode < episodesInSeason) {
+    // Next episode in the same season.
+    // forceTs = undefined → respects any saved timestamp for that episode (or 0 if none).
+    // srcOverride = src  → keeps the source the user is already watching on.
+    await openPlayer(id, 'tv', season, episode + 1, title, posterPath, undefined, src);
+  } else if (season < totalSeasons) {
+    // Season finale → first episode of the next season.
+    await openPlayer(id, 'tv', season + 1, 1, title, posterPath, undefined, src);
+  } else {
+    showToast('🎉 You\'ve reached the end of the series!', 'neutral');
+  }
 }
 
 function onPlayerMsg(e) {
@@ -2440,4 +2503,4 @@ document.addEventListener('DOMContentLoaded', async () => {
   showView('home');
   bindSearch();
   initHome();
-}); // JAS
+});
