@@ -29,16 +29,17 @@ async function loadConfig() {
     TMDB_TOKEN = cfg.tmdb_token;
     if (cfg.os_key) OS_KEY = cfg.os_key;   // OpenSubtitles API key (optional)
   } catch (err) {
-    console.error('JasMovies: could not load config –', err.message);
+    console.error('JasTV: could not load config –', err.message);
     document.body.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;
-      height:100vh;flex-direction:column;gap:16px;background:#141414;color:#fff;font-family:sans-serif">
+      height:100vh;flex-direction:column;gap:16px;background:#07070f;color:#F0EAD6;font-family:'Cinzel',Georgia,serif">
       <div style="font-size:48px">⚠️</div>
-      <div style="font-size:22px;font-weight:800">Failed to load configuration</div>
-      <div style="font-size:14px;color:#999;max-width:420px;text-align:center;line-height:1.7">
+      <div style="font-size:20px;font-weight:800;letter-spacing:.18em;text-transform:uppercase;color:#C9A84C">Failed to Load</div>
+      <div style="font-size:13px;color:#8A8070;max-width:400px;text-align:center;line-height:1.8;font-family:sans-serif">
         Could not reach the config service. Check your internet connection or Supabase Edge Function status.
       </div>
-      <button onclick="location.reload()" style="background:#e50914;color:#fff;padding:12px 28px;
-        border-radius:6px;font-size:16px;font-weight:700;border:none;cursor:pointer;margin-top:8px">
+      <button onclick="location.reload()" style="background:#C9A84C;color:#07070f;padding:12px 32px;
+        border-radius:4px;font-size:12px;font-weight:800;border:none;cursor:pointer;margin-top:8px;
+        letter-spacing:.2em;text-transform:uppercase;font-family:'Cinzel',Georgia,serif">
         ↺ Retry
       </button>
     </div>`;
@@ -438,8 +439,18 @@ function goBack() {
   if (active === 'player') killPlayer();
   showView(prev);
   $f = null;
-  if (prev === 'home') refreshContinueWatching();
+  if (prev === 'home') {
+    refreshContinueWatching();
+    setTimeout(() => startHeroCycle(), 200);
+  }
   requestAnimationFrame(() => focusFirst(document.getElementById('view-' + prev)));
+}
+
+function _hideCapLine() {
+  // Stub: caption overlay is removed when frame-wrap is replaced by renderPlayer().
+  // No separate DOM node to clean up unless captions are active.
+  const cap = document.getElementById('cap-line');
+  if (cap) cap.remove();
 }
 
 function killPlayer() {
@@ -1001,6 +1012,76 @@ function showConfirm(msg) {
 ═══════════════════════════════════════════════════════════════════ */
 let homeLoaded = false;
 let heroItem = null, heroType = 'movie';
+let _heroItems = [], _heroIdx = 0, _heroTimer = null;
+
+/* Build ★ star string from a 0–10 TMDB average */
+function buildStars(avg) {
+  const v = avg / 2;
+  const full = Math.floor(v);
+  const half = (v - full) >= 0.35 ? 1 : 0;
+  const empty = 5 - full - half;
+  return '★'.repeat(full) + (half ? '½' : '') + '☆'.repeat(empty);
+}
+
+function updateHero(item, idx) {
+  if (active !== 'home') { heroItem = item; return; }
+  heroItem = item;
+
+  const hero = document.getElementById('hero');
+  if (!hero) return;
+
+  hero.classList.add('hero-changing');
+
+  setTimeout(() => {
+    const title = item.title || item.name || '';
+    const year  = (item.release_date || item.first_air_date || '').slice(0, 4);
+    const rat   = item.vote_average ? +item.vote_average.toFixed(1) : 0;
+    const stars = rat ? buildStars(rat) : '';
+    const bd    = backdropUrl(item.backdrop_path);
+
+    const bgEl = document.getElementById('hero-bg');
+    if (bgEl) { bgEl.src = bd; bgEl.alt = title; }
+
+    const titleEl = document.getElementById('hero-title');
+    if (titleEl) titleEl.textContent = title;
+
+    const metaEl = document.getElementById('hero-meta');
+    if (metaEl) metaEl.innerHTML =
+      (stars ? `<span class="star-rating">${stars}</span>` : '') +
+      (year  ? `<span>${h(year)}</span>` : '') +
+      (rat   ? `<span>${h(rat.toFixed(1))} / 10</span>` : '');
+
+    const descEl = document.getElementById('hero-desc');
+    if (descEl) descEl.textContent = item.overview || '';
+
+    const playBtn = document.getElementById('btn-hero-play');
+    if (playBtn) {
+      playBtn.dataset.id     = item.id;
+      playBtn.dataset.type   = 'movie';
+      playBtn.dataset.title  = title;
+      playBtn.dataset.poster = item.poster_path || '';
+    }
+    const infoBtn = document.getElementById('btn-hero-info');
+    if (infoBtn) { infoBtn.dataset.id = item.id; infoBtn.dataset.type = 'movie'; }
+
+    document.querySelectorAll('.hero-dot').forEach((d, i) =>
+      d.classList.toggle('active', i === idx));
+
+    hero.classList.remove('hero-changing');
+  }, 420);
+}
+
+function startHeroCycle() {
+  stopHeroCycle();
+  if (_heroItems.length <= 1) return;
+  _heroTimer = setInterval(() => {
+    _heroIdx = (_heroIdx + 1) % _heroItems.length;
+    updateHero(_heroItems[_heroIdx], _heroIdx);
+  }, 7000);
+}
+function stopHeroCycle() {
+  if (_heroTimer) { clearInterval(_heroTimer); _heroTimer = null; }
+}
 
 async function initHome() {
   if (homeLoaded) return;
@@ -1021,21 +1102,24 @@ async function initHome() {
       tmdb('/trending/tv/week'),
     ]);
 
-    heroItem = tr.results[0] || pop.results[0];
-    heroType = 'movie';
+    // Store up to 5 trending movies for the hero carousel
+    _heroItems = (tr.results || []).slice(0, 5).filter(Boolean);
+    _heroIdx   = 0;
+    heroItem   = _heroItems[0] || pop.results[0];
+    heroType   = 'movie';
 
     const cwHtml = await buildContinueWatching();
 
     scroll.innerHTML =
       buildHero(heroItem) +
       cwHtml +
-      buildRow('🔥 Trending Now',       tr.results,   'movie', { path: '/trending/movie/week' }) +
-      buildRow('🎬 Popular Movies',     pop.results,  'movie', { path: '/movie/popular' }) +
-      buildRow('⭐ Top Rated Movies',   top.results,  'movie', { path: '/movie/top_rated' }) +
-      buildRow('🎭 Now Playing',        now.results,  'movie', { path: '/movie/now_playing' }) +
-      buildRow('📺 Popular TV Shows',   ptv.results,  'tv',    { path: '/tv/popular' }) +
-      buildRow('🏆 Top Rated TV',       ttv.results,  'tv',    { path: '/tv/top_rated' }) +
-      buildRow('📡 Trending TV',        trtv.results, 'tv',    { path: '/trending/tv/week' }) +
+      buildRow('Trending Now',       tr.results,   'movie', { path: '/trending/movie/week' }) +
+      buildRow('Popular Movies',     pop.results,  'movie', { path: '/movie/popular' }) +
+      buildRow('Top Rated Movies',   top.results,  'movie', { path: '/movie/top_rated' }) +
+      buildRow('Now Playing',        now.results,  'movie', { path: '/movie/now_playing' }) +
+      buildRow('Popular TV Shows',   ptv.results,  'tv',    { path: '/tv/popular' }) +
+      buildRow('Top Rated TV',       ttv.results,  'tv',    { path: '/tv/top_rated' }) +
+      buildRow('Trending TV',        trtv.results, 'tv',    { path: '/trending/tv/week' }) +
       '<div id="home-more-placeholder"></div>' +
       '<div style="height:52px"></div>';
 
@@ -1191,6 +1275,17 @@ async function initHome() {
       () => heroItem && openDetail(heroItem.id, heroType);
     setFocus(document.getElementById('btn-hero-play'), false);
 
+    // Wire hero carousel dots
+    document.getElementById('hero-dots')?.addEventListener('click', e => {
+      const dot = e.target.closest('.hero-dot');
+      if (!dot) return;
+      const idx = +dot.dataset.hi;
+      _heroIdx = idx;
+      updateHero(_heroItems[idx], idx);
+      stopHeroCycle(); startHeroCycle();
+    });
+    startHeroCycle();
+
     // ── Phase 2: genres + country rows — deferred so Phase 1 paints first ──
     // setTimeout(0) yields the main thread; Phase 1 hero + 7 rows render
     // before any of the 22 additional TMDB network calls start.
@@ -1227,30 +1322,30 @@ async function initHome() {
         ]);
 
         const moreHtml =
-          buildRow('💥 Action',             act.results,  'movie', { path: '/discover/movie', params: { with_genres: '28',    sort_by: 'popularity.desc', 'vote_count.gte': '200' } }) +
-          buildRow('🚀 Sci-Fi',             sci.results,  'movie', { path: '/discover/movie', params: { with_genres: '878',   sort_by: 'popularity.desc', 'vote_count.gte': '200' } }) +
-          buildRow('👻 Horror',             hor.results,  'movie', { path: '/discover/movie', params: { with_genres: '27',    sort_by: 'popularity.desc', 'vote_count.gte': '200' } }) +
-          buildRow('😂 Comedy',             com.results,  'movie', { path: '/discover/movie', params: { with_genres: '35',    sort_by: 'popularity.desc', 'vote_count.gte': '200' } }) +
-          buildRow('💕 Romance',            rom.results,  'movie', { path: '/discover/movie', params: { with_genres: '10749', sort_by: 'popularity.desc', 'vote_count.gte': '200' } }) +
-          buildRow('🎨 Animation',          ani.results,  'movie', { path: '/discover/movie', params: { with_genres: '16',    sort_by: 'popularity.desc', 'vote_count.gte': '200' } }) +
-          buildRow('🎙 Documentary',        doc.results,  'movie', { path: '/discover/movie', params: { with_genres: '99',    sort_by: 'popularity.desc', 'vote_count.gte': '100' } }) +
-          buildRow('🔪 Thriller',           thr.results,  'movie', { path: '/discover/movie', params: { with_genres: '53',    sort_by: 'popularity.desc', 'vote_count.gte': '200' } }) +
-          buildRow('👨‍👩‍👧 Family',             fam.results,  'movie', { path: '/discover/movie', params: { with_genres: '10751', sort_by: 'popularity.desc', 'vote_count.gte': '200' } }) +
-          buildSectionHeader('🌍 Around the World') +
-          buildRow('🇺🇸 American',           usm.results,  'movie', { path: '/discover/movie', params: { with_origin_country: 'US',       sort_by: 'popularity.desc', 'vote_count.gte': '300' } }) +
-          buildRow('🇬🇧 British',            ukm.results,  'movie', { path: '/discover/movie', params: { with_origin_country: 'GB',       sort_by: 'popularity.desc', 'vote_count.gte': '100' } }) +
-          buildRow('🇪🇸 Latino / Spanish',   esm.results,  'movie', { path: '/discover/movie', params: { with_original_language: 'es',    sort_by: 'popularity.desc', 'vote_count.gte': '100' } }) +
-          buildRow('🇮🇳 Bollywood & Indian', inm.results,  'movie', { path: '/discover/movie', params: { with_origin_country: 'IN',       sort_by: 'popularity.desc', 'vote_count.gte': '100' } }) +
-          buildRow('🇨🇳 Chinese Cinema',     cnm.results,  'movie', { path: '/discover/movie', params: { with_origin_country: 'CN|HK|TW', sort_by: 'popularity.desc', 'vote_count.gte': '100' } }) +
-          buildRow('🇯🇵 Japanese Cinema',    jpm.results,  'movie', { path: '/discover/movie', params: { with_origin_country: 'JP',       sort_by: 'popularity.desc', 'vote_count.gte': '100' } }) +
-          buildRow('🇰🇷 Korean Cinema',      krm.results,  'movie', { path: '/discover/movie', params: { with_origin_country: 'KR',       sort_by: 'popularity.desc', 'vote_count.gte': '100' } }) +
-          buildRow('🇩🇪 German Cinema',      dem.results,  'movie', { path: '/discover/movie', params: { with_origin_country: 'DE',       sort_by: 'popularity.desc', 'vote_count.gte': '50'  } }) +
-          buildRow('🇮🇹 Italian Cinema',     itm.results,  'movie', { path: '/discover/movie', params: { with_origin_country: 'IT',       sort_by: 'popularity.desc', 'vote_count.gte': '50'  } }) +
-          buildSectionHeader('📺 International TV') +
-          buildRow('🇺🇸 American TV',        ustv.results, 'tv',    { path: '/discover/tv', params: { with_origin_country: 'US', sort_by: 'popularity.desc', 'vote_count.gte': '100' } }) +
-          buildRow('🇰🇷 K-Drama',            krtv.results, 'tv',    { path: '/discover/tv', params: { with_origin_country: 'KR', sort_by: 'popularity.desc', 'vote_count.gte': '50'  } }) +
-          buildRow('🇯🇵 Japanese TV',        jptv.results, 'tv',    { path: '/discover/tv', params: { with_origin_country: 'JP', sort_by: 'popularity.desc', 'vote_count.gte': '50'  } }) +
-          buildRow('🇮🇳 Indian TV',          intv.results, 'tv',    { path: '/discover/tv', params: { with_origin_country: 'IN', sort_by: 'popularity.desc', 'vote_count.gte': '50'  } });
+          buildRow('Action',             act.results,  'movie', { path: '/discover/movie', params: { with_genres: '28',    sort_by: 'popularity.desc', 'vote_count.gte': '200' } }) +
+          buildRow('Sci-Fi',             sci.results,  'movie', { path: '/discover/movie', params: { with_genres: '878',   sort_by: 'popularity.desc', 'vote_count.gte': '200' } }) +
+          buildRow('Horror',             hor.results,  'movie', { path: '/discover/movie', params: { with_genres: '27',    sort_by: 'popularity.desc', 'vote_count.gte': '200' } }) +
+          buildRow('Comedy',             com.results,  'movie', { path: '/discover/movie', params: { with_genres: '35',    sort_by: 'popularity.desc', 'vote_count.gte': '200' } }) +
+          buildRow('Romance',            rom.results,  'movie', { path: '/discover/movie', params: { with_genres: '10749', sort_by: 'popularity.desc', 'vote_count.gte': '200' } }) +
+          buildRow('Animation',          ani.results,  'movie', { path: '/discover/movie', params: { with_genres: '16',    sort_by: 'popularity.desc', 'vote_count.gte': '200' } }) +
+          buildRow('Documentary',        doc.results,  'movie', { path: '/discover/movie', params: { with_genres: '99',    sort_by: 'popularity.desc', 'vote_count.gte': '100' } }) +
+          buildRow('Thriller',           thr.results,  'movie', { path: '/discover/movie', params: { with_genres: '53',    sort_by: 'popularity.desc', 'vote_count.gte': '200' } }) +
+          buildRow('Family',             fam.results,  'movie', { path: '/discover/movie', params: { with_genres: '10751', sort_by: 'popularity.desc', 'vote_count.gte': '200' } }) +
+          buildSectionHeader('Around the World') +
+          buildRow('American',           usm.results,  'movie', { path: '/discover/movie', params: { with_origin_country: 'US',       sort_by: 'popularity.desc', 'vote_count.gte': '300' } }) +
+          buildRow('British',            ukm.results,  'movie', { path: '/discover/movie', params: { with_origin_country: 'GB',       sort_by: 'popularity.desc', 'vote_count.gte': '100' } }) +
+          buildRow('Latino & Spanish',   esm.results,  'movie', { path: '/discover/movie', params: { with_original_language: 'es',    sort_by: 'popularity.desc', 'vote_count.gte': '100' } }) +
+          buildRow('Bollywood & Indian', inm.results,  'movie', { path: '/discover/movie', params: { with_origin_country: 'IN',       sort_by: 'popularity.desc', 'vote_count.gte': '100' } }) +
+          buildRow('Chinese Cinema',     cnm.results,  'movie', { path: '/discover/movie', params: { with_origin_country: 'CN|HK|TW', sort_by: 'popularity.desc', 'vote_count.gte': '100' } }) +
+          buildRow('Japanese Cinema',    jpm.results,  'movie', { path: '/discover/movie', params: { with_origin_country: 'JP',       sort_by: 'popularity.desc', 'vote_count.gte': '100' } }) +
+          buildRow('Korean Cinema',      krm.results,  'movie', { path: '/discover/movie', params: { with_origin_country: 'KR',       sort_by: 'popularity.desc', 'vote_count.gte': '100' } }) +
+          buildRow('German Cinema',      dem.results,  'movie', { path: '/discover/movie', params: { with_origin_country: 'DE',       sort_by: 'popularity.desc', 'vote_count.gte': '50'  } }) +
+          buildRow('Italian Cinema',     itm.results,  'movie', { path: '/discover/movie', params: { with_origin_country: 'IT',       sort_by: 'popularity.desc', 'vote_count.gte': '50'  } }) +
+          buildSectionHeader('International TV') +
+          buildRow('American TV',        ustv.results, 'tv',    { path: '/discover/tv', params: { with_origin_country: 'US', sort_by: 'popularity.desc', 'vote_count.gte': '100' } }) +
+          buildRow('K-Drama',            krtv.results, 'tv',    { path: '/discover/tv', params: { with_origin_country: 'KR', sort_by: 'popularity.desc', 'vote_count.gte': '50'  } }) +
+          buildRow('Japanese TV',        jptv.results, 'tv',    { path: '/discover/tv', params: { with_origin_country: 'JP', sort_by: 'popularity.desc', 'vote_count.gte': '50'  } }) +
+          buildRow('Indian TV',          intv.results, 'tv',    { path: '/discover/tv', params: { with_origin_country: 'IN', sort_by: 'popularity.desc', 'vote_count.gte': '50'  } });
 
         const placeholder = document.getElementById('home-more-placeholder');
         if (placeholder) {
@@ -1300,23 +1395,35 @@ function buildHero(item) {
   if (!item) return '';
   const title = item.title || item.name || '';
   const year  = (item.release_date || item.first_air_date || '').slice(0, 4);
-  const rat   = item.vote_average ? item.vote_average.toFixed(1) : '';
+  const rat   = item.vote_average ? +item.vote_average.toFixed(1) : 0;
+  const stars = rat ? buildStars(rat) : '';
   const bd    = backdropUrl(item.backdrop_path);
+  const dotsHtml = _heroItems.length > 1
+    ? _heroItems.map((_, i) =>
+        `<div class="hero-dot focusable${i === 0 ? ' active' : ''}" tabindex="0" data-hi="${i}"></div>`
+      ).join('')
+    : '';
   return `<div id="hero">
-    ${bd ? `<img id="hero-bg" src="${bd}" alt="">` : '<div id="hero-bg"></div>'}
+    ${bd ? `<img id="hero-bg" src="${bd}" alt="${a(title)}">` : '<div id="hero-bg"></div>'}
     <div id="hero-grad"></div>
     <div id="hero-info">
+      <div id="hero-eyebrow">Now Showing</div>
       <div id="hero-title">${h(title)}</div>
-      <div id="hero-meta">${h([year, rat ? '★ ' + rat : ''].filter(Boolean).join('  ·  '))}</div>
+      <div id="hero-meta">
+        ${stars ? `<span class="star-rating">${stars}</span>` : ''}
+        ${year  ? `<span>${h(year)}</span>` : ''}
+        ${rat   ? `<span>${h(rat.toFixed(1))} / 10</span>` : ''}
+      </div>
       <div id="hero-desc">${h(item.overview || '')}</div>
       <div id="hero-btns">
         <button id="btn-hero-play" class="btn-white focusable" tabindex="0"
           data-action="play" data-id="${item.id}" data-type="movie"
-          data-title="${a(title)}" data-poster="${a(item.poster_path||'')}">▶  Play</button>
+          data-title="${a(title)}" data-poster="${a(item.poster_path||'')}">&#9654;  Play Now</button>
         <button id="btn-hero-info" class="btn-ghost focusable" tabindex="0"
-          data-action="detail" data-id="${item.id}" data-type="movie">ⓘ  More Info</button>
+          data-action="detail" data-id="${item.id}" data-type="movie">&#x24D8;  More Info</button>
       </div>
     </div>
+    ${dotsHtml ? `<div id="hero-dots">${dotsHtml}</div>` : ''}
   </div>`;
 }
 
