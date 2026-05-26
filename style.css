@@ -559,6 +559,7 @@ html, body {
    bar-hidden class added by JS; any key brings it back. */
 #player-bar {
   flex-shrink: 0;
+  position: relative; z-index: 20; /* always above iframe stacking context */
   display: flex; align-items: center; gap: 12px;
   padding: 10px 22px;
   background: rgba(0,0,0,.92);
@@ -1149,3 +1150,129 @@ html, body {
 .more-strip .card .card-name  { font-size: 12px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 2px; }
 .more-strip .card .card-sub   { font-size: 11px; color: var(--muted); font-weight: 700; }
 .more-strip .card.focused     { border-color: #fff; transform: scale(1.06); z-index: 2; }
+
+
+/* ═══════════════════════════════════════════════════════════
+   COMMENTS
+═══════════════════════════════════════════════════════════ */
+
+/* ── Compose box (logged-in) ──────────────────────────── */
+#cmt-compose {
+  background: var(--bg2);
+  border-radius: var(--radius);
+  border: 1px solid rgba(255,255,255,.07);
+  padding: 16px 18px 12px;
+  margin-bottom: 14px;
+}
+.cmt-compose-label {
+  font-size: 12px; font-weight: 700;
+  color: var(--muted); text-transform: uppercase;
+  letter-spacing: .5px; margin-bottom: 10px;
+}
+.cmt-who { color: var(--text); text-transform: none; letter-spacing: 0; }
+
+.cmt-textarea {
+  width: 100%;
+  background: rgba(255,255,255,.07);
+  border: 2px solid rgba(255,255,255,.12);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: inherit; font-size: 14px; line-height: 1.55;
+  padding: 10px 13px;
+  resize: vertical; min-height: 72px;
+  outline: none;
+  transition: border-color var(--ease), background var(--ease);
+}
+.cmt-textarea:focus, .cmt-textarea.focused {
+  border-color: #fff; background: rgba(255,255,255,.11);
+}
+.cmt-textarea::placeholder { color: var(--muted); }
+
+.cmt-compose-footer {
+  display: flex; align-items: center;
+  justify-content: space-between; margin-top: 8px;
+}
+.cmt-charcount { font-size: 11px; color: var(--muted); }
+
+.cmt-post-btn {
+  background: var(--accent); color: #fff;
+  padding: 8px 22px; border-radius: var(--radius);
+  font-size: 13px; font-weight: 800;
+  border: 3px solid transparent;
+  transition: background var(--ease);
+}
+.cmt-post-btn:disabled { opacity: .5; cursor: not-allowed; }
+.cmt-post-btn.focused  { background: var(--accent2); }
+
+.cmt-error {
+  font-size: 12px; color: #ff6b6b;
+  margin-top: 8px; line-height: 1.5;
+}
+
+/* ── Guest sign-in bar (logged-out) ───────────────────── */
+#cmt-guestwall {
+  display: flex; align-items: center; gap: 12px;
+  background: var(--bg2); border-radius: var(--radius);
+  border: 1px solid rgba(255,255,255,.07);
+  padding: 14px 18px; margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+.cmt-gw-icon { font-size: 20px; flex-shrink: 0; }
+.cmt-gw-text { font-size: 14px; color: var(--muted); flex: 1; }
+.cmt-gw-btn {
+  background: var(--accent); color: #fff;
+  padding: 8px 20px; border-radius: var(--radius);
+  font-size: 13px; font-weight: 800;
+  border: 3px solid transparent; white-space: nowrap;
+  transition: background var(--ease);
+}
+.cmt-gw-btn.focused { background: var(--accent2); }
+
+/* ── Load Comments / Load More button ─────────────────── */
+.cmt-load-btn {
+  display: block; width: 100%;
+  background: rgba(255,255,255,.08); color: var(--muted);
+  border: 2px solid rgba(255,255,255,.1);
+  border-radius: var(--radius);
+  padding: 11px 0; margin-bottom: 16px;
+  font-size: 13px; font-weight: 700;
+  text-align: center;
+  transition: background var(--ease), color var(--ease), border-color var(--ease);
+}
+.cmt-load-btn.focused { background: rgba(255,255,255,.16); color: #fff; border-color: #fff; }
+.cmt-load-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+/* ── Comment list ─────────────────────────────────────── */
+#cmt-list { display: flex; flex-direction: column; gap: 10px; }
+
+.cmt-item {
+  display: flex; gap: 13px; align-items: flex-start;
+  background: var(--bg2); border-radius: var(--radius);
+  border: 1px solid rgba(255,255,255,.05);
+  padding: 13px 15px;
+}
+.cmt-avatar {
+  flex-shrink: 0; width: 34px; height: 34px;
+  border-radius: 50%; background: rgba(229,9,20,.7);
+  color: #fff; font-size: 13px; font-weight: 800;
+  display: flex; align-items: center; justify-content: center;
+}
+.cmt-content  { flex: 1; min-width: 0; }
+.cmt-meta     { display: flex; align-items: center; gap: 9px; margin-bottom: 7px; flex-wrap: wrap; }
+.cmt-name     { font-size: 13px; font-weight: 800; color: var(--text); }
+.cmt-date     { font-size: 11px; color: var(--muted); }
+.cmt-del {
+  margin-left: auto; background: none; border: 2px solid transparent;
+  color: var(--muted); font-size: 13px; padding: 2px 6px;
+  border-radius: 4px; cursor: pointer;
+  transition: color var(--ease), background var(--ease);
+}
+.cmt-del.focused { border-color: #fff; color: #ff6b6b; background: rgba(229,9,20,.15); }
+.cmt-body {
+  font-size: 13px; color: rgba(255,255,255,.7);
+  line-height: 1.6; white-space: pre-wrap; word-break: break-word;
+}
+.cmt-empty {
+  font-size: 14px; color: var(--muted);
+  text-align: center; padding: 20px 0;
+}
