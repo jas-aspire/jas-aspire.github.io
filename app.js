@@ -1446,6 +1446,15 @@ function makeCard(id, type, posterPath, title, sub, action, season = 1, episode 
 ═══════════════════════════════════════════════════════════════════ */
 let _det = {};
 
+/* Build ★ star string from a 0–10 TMDB average */
+function buildStars(avg) {
+  const v     = avg / 2;
+  const full  = Math.floor(v);
+  const half  = (v - full) >= 0.35 ? 1 : 0;
+  const empty = 5 - full - half;
+  return '★'.repeat(full) + (half ? '½' : '') + '☆'.repeat(empty);
+}
+
 async function openDetail(id, mediaType) {
   navigateTo('detail', () => {
     document.getElementById('view-detail').innerHTML = spinner();
@@ -1466,7 +1475,7 @@ async function openDetail(id, mediaType) {
     }
 
     _det = { id, mediaType, data, season: 1, collectionData };
-    renderDetail();
+    await renderDetail();
   } catch (err) {
     document.getElementById('view-detail').innerHTML = `<p class="err">⚠ ${h(err.message)}</p>`;
   }
@@ -1808,7 +1817,10 @@ async function renderDetail(newSeason) {
   view.querySelector('#btn-dback').onclick = goBack;
 
   view.querySelectorAll('.s-btn').forEach(b =>
-    b.addEventListener('click', () => renderDetail(+b.dataset.s))
+    b.addEventListener('click', async () => {
+      try { await renderDetail(+b.dataset.s); }
+      catch(e) { document.getElementById('view-detail').innerHTML = `<p class="err">⚠ ${h(e.message)}</p>`; }
+    })
   );
   view.querySelectorAll('.ep-card').forEach(b =>
     b.addEventListener('click', () => openPlayer(id, mediaType, curSeason, +b.dataset.ep, title, data.poster_path))
